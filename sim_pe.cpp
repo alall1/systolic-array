@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
     tfp->open("pe.vcd");    // waveform output file
 
     // ===== loop variables =====
-    vluint64_t time = 0;    // verilator's name for a 64-bit unsigned integer; used as a simulation timestamp that ticks upward
+    vluint64_t sim_time = 0;    // verilator's name for a 64-bit unsigned integer; used as a simulation timestamp that ticks upward
     int case_count = 0;     // test case count
     int errors = 0;         // a counter for how many test cases fail
     
@@ -36,19 +36,19 @@ int main(int argc, char** argv) {
 
     // ===== loop functions =====
     auto tick = [&]() {    // tick one clock cycle, one clk cycle = 2 waveform time units
-        top->clk = 0;
-        top->eval();
+        dut->clk = 0;
+        dut->eval();
         tfp->dump(sim_time++);  // reading current values & incrementing sim_time
 
-        top->clk = 1;
-        top->eval();
+        dut->clk = 1;
+        dut->eval();
         tfp->dump(sim_time++);  // reading current vals & incrementing sim_time
     };
 
     auto test_pe = [&](int A, int B) {
         // set inputs (& OxFF because 8-bit inputs for now)
-        short_A = A & 0xFF;
-        short_B = B & 0xFF;
+        int short_A = A & 0xFF;
+        int short_B = B & 0xFF;
         dut->in_a = short_A;
         dut->in_b = short_B;
 
@@ -75,6 +75,10 @@ int main(int argc, char** argv) {
     tick();
     dut->rst_n = 1;
     dut->in_valid = 1;
+
+    test_pe(5, 8);
+    test_pe(-4, -24);
+    test_pe(127, -128);
 
     // ===== cleanup =====
     tfp->close();   // close the waveform file so it is written to disk

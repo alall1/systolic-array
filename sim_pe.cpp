@@ -74,11 +74,40 @@ int main(int argc, char** argv) {
     dut->rst_n = 0;
     tick();
     dut->rst_n = 1;
+
+    // testing if in_valid works correctly
+    dut->in_valid = 0;
+
+    dut->in_a = 1;
+    dut->in_b = 1;
+
+    tick();
+
+    if (dut->out_a != 0 || dut->out_b != 0 || dut->acc != 0) {
+        printf("ERROR: in_a=%d in_b=%d; got out_a=%d out_b=%d acc=%d; expected out_a=%d out_b=%d acc=%d\n",
+                0, 0, dut->out_a, dut->out_b, dut->acc, 0, 0, 0);
+        errors++;
+    } else {
+        printf("OK: in_a=%d in_b=%d; got out_a=%d out_b=%d acc=%d\n",
+                0, 0, dut->out_a, dut->out_b, dut->acc);
+    }
+    case_count++;
+
     dut->in_valid = 1;
+
+    /*
 
     test_pe(5, 8);
     test_pe(-4, -24);
     test_pe(127, -128);
+
+    */
+
+    for (int i = -128; i < 128; i++) {
+        for (int j = -128; j < 128; j++) {
+            test_pe(i, j);
+        }
+    }
 
     // ===== cleanup =====
     tfp->close();   // close the waveform file so it is written to disk

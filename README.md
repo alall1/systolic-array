@@ -2,7 +2,7 @@
 ### Anuj Lall
 
 Current progress
-- [x] PE module complete and tested
+- [ ] PE module complete and tested
 - [ ] PE grid module complete and tested
 - [ ] feeder module complete and tested
 - [ ] control FSM module complete and tested

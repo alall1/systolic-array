@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
     int case_count = 0;     // test case count
     int errors = 0;         // a counter for how many test cases fail
     
-    int acc_sum = 0;        // accumulated sum of the 
+    int acc_sum = 0;        // accumulated sum of the PE
 
     /* ===== input & output pins =====
     input clk,

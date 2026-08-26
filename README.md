@@ -3,7 +3,7 @@
 
 Current progress
 - [x] PE module complete and tested
-- [ ] PE grid module complete and tested
+- [x] PE grid module complete and tested
 - [ ] feeder module complete and tested
 - [ ] control FSM module complete and tested
 - [ ] collector module complete and tested

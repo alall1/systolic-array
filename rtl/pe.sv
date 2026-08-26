@@ -7,6 +7,7 @@ module pe #(
     input logic signed [DATA_WIDTH-1:0] in_a,   // input from left neighbor
     input logic signed [DATA_WIDTH-1:0] in_b,   // input from top neighbor
     input logic in_valid,                       // high when inputs are real data (high if PE is being used this cycle)
+    input logic first,                          // high when PE needs to reset for the next matmul; if first -> acc = mult_result otherwise acc = acc + mult_result
     output logic signed [DATA_WIDTH-1:0] out_a, // registered copy of left neighbor input to send to right neighbor (passing along operand)
     output logic signed [DATA_WIDTH-1:0] out_b, // registered copy of top neighbor input to send to bottom neighbor
     output logic signed [ACC_WIDTH-1:0] acc,    // running total sum, read at drain time. Output of the PE
@@ -27,7 +28,8 @@ always_ff @(posedge clk or negedge rst_n) begin
     end else begin
         out_a <= in_a;
         out_b <= in_b;
-        acc <= acc + (in_a * in_b); // multiply accumulate
+        acc <= (first) ? (in_a * in_b) : (acc + (in_a * in_b)); // multiply accumulate
+        // acc <= acc + (in_a * in_b); // multiply accumulate
         out_valid <= 1'b1;
     end
 end

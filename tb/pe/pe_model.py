@@ -32,7 +32,7 @@ class PEModel:
         self.acc = 0
         self.out_valid = 0
 
-    def step(self, in_a: int, in_b: int, in_valid: int, rst_n: int = 1):
+    def step(self, in_a: int, in_b: int, in_valid: int, first: int = 0, rst_n: int = 1):
         if not rst_n:
             self.reset()
         elif in_valid:
@@ -40,7 +40,8 @@ class PEModel:
             self.out_b = to_unsigned(in_b, self.data_width)
             a = to_signed(in_a, self.data_width)
             b = to_signed(in_b, self.data_width)
-            self.acc = (self.acc + a * b) & self.acc_mask
+            mult_result = a * b
+            self.acc = (mult_result & self.acc_mask) if first else ((self.acc + mult_result) & self.acc_mask)
             self.out_valid = 1
         else:
             # bubble: operands drop to 0, valid drops, accumulator holds

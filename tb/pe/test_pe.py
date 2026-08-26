@@ -7,10 +7,8 @@ Run:
 
 Notes on timing
 ---------------
-The DUT registers everything on the rising edge, so an input presented in the
-window before edge N shows up on the outputs after edge N. The pattern used
-throughout: drive inputs, `await RisingEdge(clk)` to cross the edge, then a
-tiny settle delay before sampling so we read post-edge values, not a race.
+The DUT registers everything on the rising edge, so an input presented in the window before edge N shows up on the outputs after edge N. The pattern used
+throughout: drive inputs, `await RisingEdge(clk)` to cross the edge, then a tiny settle delay before sampling so we read post-edge values, not a race.
 """
 
 import random
@@ -19,7 +17,8 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
-from pe_model import PEModel, to_signed, to_unsigned
+from pe_model import PEModel
+from utils import to_signed, to_unsigned
 
 CLK_PERIOD_NS = 10
 

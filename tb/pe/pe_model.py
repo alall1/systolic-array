@@ -7,15 +7,7 @@ Intended behavior:
   - active      -> register operands, out_valid = 1, acc += a*b
 """
 
-def to_signed(value: int, width: int) -> int:
-    """Interpret the low 'width' bits of 'value' as two's complement; used to convert n-bit representations into 32-bit Python int"""
-    value &= (1 << width) - 1
-    sign_bit = 1 << (width - 1)
-    return (value - (1 << width)) if (value & sign_bit) else value
-
-def to_unsigned(value: int, width: int) -> int:
-    """Interpret the low 'width' bits of 'value' as unsigned int; used to convert 32-bit Python int to n-bit representation"""
-    return value & ((1 << width) - 1)
+from utils import to_signed, to_unsigned
 
 class PEModel:
     """

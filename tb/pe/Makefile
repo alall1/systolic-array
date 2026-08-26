@@ -10,8 +10,11 @@ TOPLEVEL_LANG ?= verilog
 RTL_DIR ?= ../../rtl
 VERILOG_SOURCES += $(RTL_DIR)/pe.sv
 
-TOPLEVEL = pe          		    # must match the module name in pe.sv
-COCOTB_TEST_MODULES = test_pe	# python file (test_pe.py), no extension
+TOPLEVEL = pe
+COCOTB_TEST_MODULES = test_pe
+
+# make the shared common/ importable
+export PYTHONPATH := $(PWD)/../common:$(PYTHONPATH)
 
 COMPILE_ARGS += -GDATA_WIDTH=8 -GACC_WIDTH=32
 EXTRA_ARGS   += --trace --trace-structs

@@ -14,10 +14,15 @@ module pe #(
 );
 
 always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n || !in_valid) begin
+    if (!rst_n) begin
         out_a <= '0;
         out_b <= '0;
         acc <= '0;
+        out_valid <= 1'b0;
+    end else if (!in_valid) begin
+        out_a <= '0;
+        out_b <= '0;
+        acc <= acc;                 // acc keeps its value instead of resetting to 0
         out_valid <= 1'b0;
     end else begin
         out_a <= in_a;

@@ -46,7 +46,7 @@ async def reset_dut(dut, cycles: int = 2):
     await Timer(1, unit="ns")
     dut.rst_n.value = 1
 
-async def step(dut, in_a: int, in_b: int, in_valid: int, first: int, data_width: int):
+async def step(dut, in_a: int, in_b: int, in_valid: int, in_first: int, data_width: int):
     """Drive one set of inputs and cross one clock edge
 
     Inputs are written as unsigned bit patterns so negative operands are fed in correctly regardless of the port's signedness.
@@ -54,7 +54,7 @@ async def step(dut, in_a: int, in_b: int, in_valid: int, first: int, data_width:
     dut.in_a.value = to_unsigned(in_a, data_width)
     dut.in_b.value = to_unsigned(in_b, data_width)
     dut.in_valid.value = in_valid
-    dut.first.value = first
+    dut.in_first.value = in_first
     await RisingEdge(dut.clk)
     await Timer(1, unit="ns")  # settle past the edge before anyone samples
 
@@ -64,6 +64,7 @@ def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
     dut_out_b = int(dut.out_b.value)
     dut_acc = int(dut.acc.value) & ((1 << acc_width) - 1)
     dut_valid = int(dut.out_valid.value)
+    dut_first = int(dut.out_first.value)
 
     prefix = f"[{ctx}] " if ctx else ""
     assert dut_out_a == model.out_a, (
@@ -72,6 +73,8 @@ def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
         f"{prefix}out_b: dut={dut_out_b} exp={model.out_b}")
     assert dut_valid == model.out_valid, (
         f"{prefix}out_valid: dut={dut_valid} exp={model.out_valid}")
+    assert dut_first == model.out_first, (
+            f"{prefix}out_first: dut={dut_first} exp={model.out_first}")
     assert dut_acc == model.acc, (
         f"{prefix}acc: dut={to_signed(dut_acc, acc_width)} "
         f"exp={model.acc_signed} (raw dut={dut_acc} exp={model.acc})")
@@ -94,6 +97,7 @@ async def test_reset(dut):
     assert int(dut.out_b.value) == 0
     assert int(dut.acc.value) == 0
     assert int(dut.out_valid.value) == 0
+    assert int(dut.out_first.value) == 0
 
 @cocotb.test()
 async def test_single_mac(dut):
@@ -108,7 +112,7 @@ async def test_single_mac(dut):
     model.reset()
 
     a, b = 7, -3
-    await step(dut, a, b, in_valid=1, first=0, data_width=data_width)
+    await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
     model.step(a, b, in_valid=1)
     check(dut, model, data_width, acc_width, ctx="single_mac")
 
@@ -130,7 +134,7 @@ async def test_accumulation(dut):
     for i in range(20):
         a = random.randint(lo, hi)
         b = random.randint(lo, hi)
-        await step(dut, a, b, in_valid=1, first=0, data_width=data_width)
+        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
         model.step(a, b, in_valid=1)
         check(dut, model, data_width, acc_width, ctx=f"accum[{i}]")
 
@@ -148,7 +152,7 @@ async def test_operand_propagation(dut):
 
     vectors = [(1, 2), (3, 4), (-5, 6), (7, -8), (0, 0)]
     for i, (a, b) in enumerate(vectors):
-        await step(dut, a, b, in_valid=1, first=0, data_width=data_width)
+        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
         model.step(a, b, in_valid=1)
         check(dut, model, data_width, acc_width, ctx=f"prop[{i}]")
 
@@ -171,27 +175,27 @@ async def test_bubble_holds_acc(dut):
 
     # phase 1: accumulate a few real terms
     for (a, b) in [(2, 3), (4, 5), (-1, 6)]:
-        await step(dut, a, b, in_valid=1, first=0, data_width=data_width)
+        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
         model.step(a, b, in_valid=1)
         check(dut, model, data_width, acc_width, ctx="bubble/pre")
 
     acc_before = model.acc
 
     # phase 2: a bubble — acc must not change
-    await step(dut, 99, 99, in_valid=0, first=0, data_width=data_width)
+    await step(dut, 99, 99, in_valid=0, in_first=0, data_width=data_width)
     model.step(99, 99, in_valid=0)
     check(dut, model, data_width, acc_width, ctx="bubble/during")
     assert model.acc == acc_before, "model sanity: acc should hold on bubble"
 
     # phase 3: resume; picks up from the held value
     for (a, b) in [(7, 2), (3, 3)]:
-        await step(dut, a, b, in_valid=1, first=0, data_width=data_width)
+        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
         model.step(a, b, in_valid=1)
         check(dut, model, data_width, acc_width, ctx="bubble/post")
 
 @cocotb.test()
-async def test_first(dut):
-    """A 'first' input sets accumulator equal to current multiply product"""
+async def test_in_first(dut):
+    """A 'in_first' input sets accumulator equal to current multiply product"""
     data_width, acc_width = get_params(dut)
     model = PEModel(data_width, acc_width)
 
@@ -207,11 +211,11 @@ async def test_first(dut):
     for i in range(5):
         a = random.randint(lo, hi)
         b = random.randint(lo, hi)
-        await step(dut, a, b, in_valid=1, first=0, data_width=data_width)
+        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
         model.step(a, b, in_valid=1)
     
-    await step(dut, a, b, in_valid=1, first=1, data_width=data_width)
-    model.step(a, b, in_valid=1, first=1)
+    await step(dut, a, b, in_valid=1, in_first=1, data_width=data_width)
+    model.step(a, b, in_valid=1, in_first=1)
 
     check(dut, model, data_width, acc_width, ctx=f"accum[{i}]")
 
@@ -235,6 +239,6 @@ async def test_random_regression(dut):
         b = random.randint(lo, hi)
         v = 1 if random.random() < 0.8 else 0
         f = 1 if random.random() < 0.8 else 0
-        await step(dut, a, b, in_valid=v, first=f, data_width=data_width)
-        model.step(a, b, in_valid=v, first=f)
+        await step(dut, a, b, in_valid=v, in_first=f, data_width=data_width)
+        model.step(a, b, in_valid=v, in_first=f)
         check(dut, model, data_width, acc_width, ctx=f"rand[{i}]")

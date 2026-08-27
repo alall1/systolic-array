@@ -62,8 +62,8 @@ end
 always_comb begin
     for (int i = 0; i < N; i++) begin
         for (int j = 0; j < N; j++) begin
-            if (i == 0) in_first_bus[i+1][j] = out_first_bus[i][j];     // only top row "first" signas propagate left; the rest propagate downward
-            in_first_bus[i][j+1] = out_first_bus[i][j];
+            if (i == 0) in_first_bus[i][j+1] = out_first_bus[i][j];     // only top row "first" signas propagate left; the rest propagate downward
+            in_first_bus[i+1][j] = out_first_bus[i][j];
         end
     end
 end

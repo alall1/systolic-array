@@ -125,8 +125,8 @@ async def test_single_matmul(dut):
     check_grid(got, golden_matmul(A, B), ctx="small_known")
 
 @cocotb.test()
-async def test_multiple_matmul(dut):
-    """Randomized A, B across many trials; fresh reset per trial to clear accumulator between matmuls, since no back-to-back matmuls yet"""
+async def test_random_matmul(dut):
+    """Randomized A, B across many trials; NOT for consecutive matmuls--fresh reset per trial"""
     data_width, acc_width, N = get_params(dut)
     await start_clock(dut)
 
@@ -135,11 +135,28 @@ async def test_multiple_matmul(dut):
     bound = max(2, min(hi, 1 << (data_width // 2)))
 
     for trial in range(30):
-        # await reset_dut(dut, N, data_width)
+        await reset_dut(dut, N, data_width)
         A = np.random.randint(-bound, bound, size=(N, N))
         B = np.random.randint(-bound, bound, size=(N, N))
         got = await run_matmul(dut, A, B, data_width, acc_width, N)
         check_grid(got, golden_matmul(A, B), ctx=f"rand[{trial}]")
+
+@cocotb.test()
+async def test_consecutive_matmul(dut):
+    """Testing consecutive matmuls with no reset in-between; tests 'first' signal propagation"""
+    data_width, acc_width, N = get_params(dut)
+    await start_clock(dut)
+    await reset_dut(dut, N, data_width)   # ONE reset, at the very start only
+
+    hi = (1 << (data_width - 1)) - 1
+    # Keep operands modest so N-term sums stay well inside ACC_WIDTH.
+    bound = max(2, min(hi, 1 << (data_width // 2)))
+
+    for trial in range(30):
+        A = np.random.randint(-bound, bound, size=(N, N))
+        B = np.random.randint(-bound, bound, size=(N, N))
+        got = await run_matmul(dut, A, B, data_width, acc_width, N)
+        check_grid(got, golden_matmul(A, B), ctx=f"multi[{trial}]")
 
 @cocotb.test()
 async def test_zeros(dut):

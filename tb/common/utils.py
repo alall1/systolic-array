@@ -25,7 +25,6 @@ def golden_matmul(A, B):
     """The golden model for matmuls"""
     return np.asarray(A) @ np.asarray(B)
 
-
 def build_skew_schedule(A, B):
     """
     Return (a_in, b_in, n_cycles).
@@ -41,10 +40,8 @@ def build_skew_schedule(A, B):
     N = A.shape[0]
     assert A.shape == (N, N) and B.shape == (N, N), "square NxN only (for now)"
 
-    # A value A[i][k] must reach PE(i,j) at the right time for every j; the
-    # edge injection is delayed by the row index i. The last useful value
-    # enters at cycle (N-1)+(N-1) and needs another N-1 to propagate to the
-    # far corner, so 3N is a safe upper bound. We use the tight value below.
+    # A value A[i][k] must reach PE(i,j) at the right time for every j; the edge injection is delayed by the row index i. The last useful value
+    # enters at cycle (N-1)+(N-1) and needs another N-1 to propagate to the far corner, so 3N is a safe upper bound. We use the tight value below.
     n_cycles = 3 * N
 
     a_in = [[0] * n_cycles for _ in range(N)]

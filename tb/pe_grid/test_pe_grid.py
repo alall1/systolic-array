@@ -6,7 +6,7 @@ Run:
     make WAVES=1  (dump waves for GTKWave)
 
 Golden model: numpy A @ B.
-Driver: applies diagonal skew from build_skew_schedule, then waits on "done" signal and reads acc grid.
+Driver: applies diagonal skew from build_skew_schedule, then waits on "out_ready" signal and reads acc grid.
 """
 
 import random
@@ -34,6 +34,7 @@ async def start_clock(dut):
 async def reset_dut(dut, N, data_width, cycles=2):
     dut.rst_n.value = 0
     dut.inp_valid.value = 0
+    dut.inp_first.value = 0
     for i in range(N):
         dut.a_in[i].value = 0
         dut.b_in[i].value = 0
@@ -44,12 +45,12 @@ async def reset_dut(dut, N, data_width, cycles=2):
     await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
 
-async def wait_done(dut, timeout_cycles):
-    """Wait for done, but fail if it doesn't assert in time"""
+async def wait_out_ready(dut, timeout_cycles):
+    """Wait for out_ready, but fail if it doesn't assert in time"""
     for _ in range(timeout_cycles):
         await RisingEdge(dut.clk)
         await Timer(1, unit="ns")
-        if int(dut.done.value) == 1:
+        if int(dut.out_ready.value) == 1:
             return True
     return False
 
@@ -65,11 +66,10 @@ async def run_matmul(dut, A, B, data_width, acc_width, N):
     """Drive one A@B through the grid and return the read-out acc grid"""
     a_in, b_in, n_cycles = build_skew_schedule(A, B)
 
-    # Drive the skewed streams. Keep inp_valid high the whole time so the
-    # accumulators are never cleared mid-flight (matters given the PE's
-    # current !valid-clears-acc behavior).
+    # Drive the skewed streams; inp_valid high whole time to not screw up matmuls
     dut.inp_valid.value = 1
     for t in range(n_cycles):
+        dut.inp_first.value = 1 if t == 0 else 0    # inp_first is high only for the very first cycle of the matmul
         for i in range(N):
             dut.a_in[i].value = to_unsigned(a_in[i][t], data_width)
         for j in range(N):
@@ -77,16 +77,16 @@ async def run_matmul(dut, A, B, data_width, acc_width, N):
         await RisingEdge(dut.clk)
         await Timer(1, unit="ns")
 
-    # Feed zeros but keep valid high while waiting for done to assert.
+    # Feed zeros but keep valid high while waiting for out_ready to assert.
     for i in range(N):
         dut.a_in[i].value = 0
         dut.b_in[i].value = 0
 
     # Generous timeout: schedule length plus slack.
-    got_done = await wait_done(dut, timeout_cycles=2 * n_cycles + 10)
-    assert got_done, (
-        f"done never asserted within timeout for N={N}; "
-        f"check the grid's done counter/FSM")
+    got_out_ready = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
+    assert got_out_ready, (
+        f"out_ready never asserted within timeout for N={N}; "
+        f"check the grid's out_ready counter/FSM")
 
     return read_out_grid(dut, N, acc_width)
 
@@ -113,7 +113,7 @@ async def test_identity(dut):
     check_grid(got, golden_matmul(A, B), ctx="identity")
 
 @cocotb.test()
-async def test_small_known(dut):
+async def test_single_matmul(dut):
     """A fixed small case verifiable by hand"""
     data_width, acc_width, N = get_params(dut)
     await start_clock(dut)
@@ -125,18 +125,17 @@ async def test_small_known(dut):
     check_grid(got, golden_matmul(A, B), ctx="small_known")
 
 @cocotb.test()
-async def test_random_regression(dut):
+async def test_multiple_matmul(dut):
     """Randomized A, B across many trials; fresh reset per trial to clear accumulator between matmuls, since no back-to-back matmuls yet"""
     data_width, acc_width, N = get_params(dut)
     await start_clock(dut)
 
-    lo = -(1 << (data_width - 1))
     hi = (1 << (data_width - 1)) - 1
     # Keep operands modest so N-term sums stay well inside ACC_WIDTH.
     bound = max(2, min(hi, 1 << (data_width // 2)))
 
     for trial in range(30):
-        await reset_dut(dut, N, data_width)
+        # await reset_dut(dut, N, data_width)
         A = np.random.randint(-bound, bound, size=(N, N))
         B = np.random.randint(-bound, bound, size=(N, N))
         got = await run_matmul(dut, A, B, data_width, acc_width, N)

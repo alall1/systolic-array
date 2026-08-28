@@ -40,20 +40,22 @@ async def reset_dut(dut, cycles: int = 2):
     dut.rst_n.value = 0
     dut.in_a.value = 0
     dut.in_b.value = 0
-    dut.in_valid.value = 0
+    dut.in_a_valid.value = 0
+    dut.in_b_valid.value = 0
     for _ in range(cycles):
         await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
     dut.rst_n.value = 1
 
-async def step(dut, in_a: int, in_b: int, in_valid: int, in_first: int, data_width: int):
+async def step(dut, in_a: int, in_b: int, in_a_valid: int, in_b_valid: int, in_first: int, data_width: int):
     """Drive one set of inputs and cross one clock edge
 
     Inputs are written as unsigned bit patterns so negative operands are fed in correctly regardless of the port's signedness.
     """
     dut.in_a.value = to_unsigned(in_a, data_width)
     dut.in_b.value = to_unsigned(in_b, data_width)
-    dut.in_valid.value = in_valid
+    dut.in_a_valid.value = in_a_valid
+    dut.in_b_valid.value = in_b_valid
     dut.in_first.value = in_first
     await RisingEdge(dut.clk)
     await Timer(1, unit="ns")  # settle past the edge before anyone samples
@@ -63,7 +65,8 @@ def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
     dut_out_a = int(dut.out_a.value)
     dut_out_b = int(dut.out_b.value)
     dut_acc = int(dut.acc.value) & ((1 << acc_width) - 1)
-    dut_valid = int(dut.out_valid.value)
+    dut_a_valid = int(dut.out_a_valid.value)
+    dut_b_valid = int(dut.out_b_valid.value)
     dut_first = int(dut.out_first.value)
 
     prefix = f"[{ctx}] " if ctx else ""
@@ -71,8 +74,10 @@ def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
         f"{prefix}out_a: dut={dut_out_a} exp={model.out_a}")
     assert dut_out_b == model.out_b, (
         f"{prefix}out_b: dut={dut_out_b} exp={model.out_b}")
-    assert dut_valid == model.out_valid, (
-        f"{prefix}out_valid: dut={dut_valid} exp={model.out_valid}")
+    assert dut_a_valid == model.out_a_valid, (
+        f"{prefix}out_a_valid: dut={dut_a_valid} exp={model.out_a_valid}")
+    assert dut_b_valid == model.out_b_valid, (
+            f"{prefix}out_b_valid: dut={dut_b_valid} exp={model.out_b_valid}")
     assert dut_first == model.out_first, (
             f"{prefix}out_first: dut={dut_first} exp={model.out_first}")
     assert dut_acc == model.acc, (
@@ -96,7 +101,8 @@ async def test_reset(dut):
     assert int(dut.out_a.value) == 0
     assert int(dut.out_b.value) == 0
     assert int(dut.acc.value) == 0
-    assert int(dut.out_valid.value) == 0
+    assert int(dut.out_a_valid.value) == 0
+    assert int(dut.out_b_valid.value) == 0
     assert int(dut.out_first.value) == 0
 
 @cocotb.test()
@@ -112,8 +118,8 @@ async def test_single_mac(dut):
     model.reset()
 
     a, b = 7, -3
-    await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
-    model.step(a, b, in_valid=1)
+    await step(dut, a, b, in_a_valid=1, in_b_valid=1, in_first=0, data_width=data_width)
+    model.step(a, b, in_a_valid=1, in_b_valid=1)
     check(dut, model, data_width, acc_width, ctx="single_mac")
 
 @cocotb.test()
@@ -134,13 +140,13 @@ async def test_accumulation(dut):
     for i in range(20):
         a = random.randint(lo, hi)
         b = random.randint(lo, hi)
-        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
-        model.step(a, b, in_valid=1)
+        await step(dut, a, b, in_a_valid = 1, in_b_valid=1, in_first=0, data_width=data_width)
+        model.step(a, b, in_a_valid = 1, in_b_valid=1)
         check(dut, model, data_width, acc_width, ctx=f"accum[{i}]")
 
 @cocotb.test()
 async def test_operand_propagation(dut):
-    """out_a/out_b are the previous cycle's inputs; out_valid tracks in_valid delayed one cycle"""
+    """out_a/out_b are the previous cycle's inputs; out_valid tracks in_a_valid = 1, in_b_valid delayed one cycle"""
     data_width, acc_width = get_params(dut)
     model = PEModel(data_width, acc_width)
 
@@ -152,14 +158,15 @@ async def test_operand_propagation(dut):
 
     vectors = [(1, 2), (3, 4), (-5, 6), (7, -8), (0, 0)]
     for i, (a, b) in enumerate(vectors):
-        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
-        model.step(a, b, in_valid=1)
+        await step(dut, a, b, in_a_valid = 1, in_b_valid=1, in_first=0, data_width=data_width)
+        model.step(a, b, in_a_valid = 1, in_b_valid=1)
         check(dut, model, data_width, acc_width, ctx=f"prop[{i}]")
 
+# TODO: test if only 1 valid makes a bubble
 @cocotb.test()
 async def test_bubble_holds_acc(dut):
     """
-    Accumulate, insert an in_valid=0 bubble, then resume. Across the bubble:
+    Accumulate, insert an in_a_valid = 1, in_b_valid=0 bubble, then resume. Across the bubble:
       - acc must HOLD its value
       - out_a/out_b/out_valid drop to 0
     Then accumulation resumes from the held value.
@@ -175,22 +182,28 @@ async def test_bubble_holds_acc(dut):
 
     # phase 1: accumulate a few real terms
     for (a, b) in [(2, 3), (4, 5), (-1, 6)]:
-        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
-        model.step(a, b, in_valid=1)
+        await step(dut, a, b, in_a_valid = 0, in_b_valid=0, in_first=0, data_width=data_width)
+        model.step(a, b, in_a_valid = 0, in_b_valid=0)
         check(dut, model, data_width, acc_width, ctx="bubble/pre")
 
     acc_before = model.acc
 
-    # phase 2: a bubble — acc must not change
-    await step(dut, 99, 99, in_valid=0, in_first=0, data_width=data_width)
-    model.step(99, 99, in_valid=0)
-    check(dut, model, data_width, acc_width, ctx="bubble/during")
+    # phase 2: a bubble — acc must not change (in_a_valid = 0 and in_b_valid = 0)
+    await step(dut, 99, 99, in_a_valid = 0, in_b_valid=0, in_first=0, data_width=data_width)
+    model.step(99, 99, in_a_valid = 0, in_b_valid=0)
+    check(dut, model, data_width, acc_width, ctx="bubble/both zero")
     assert model.acc == acc_before, "model sanity: acc should hold on bubble"
 
-    # phase 3: resume; picks up from the held value
+    # phase 3: a bubble — acc must not change (in_a_valid = 1 and in_b_valid = 0)
+    await step(dut, 99, 99, in_a_valid = 1, in_b_valid=0, in_first=0, data_width=data_width)
+    model.step(99, 99, in_a_valid = 1, in_b_valid=0)
+    check(dut, model, data_width, acc_width, ctx="bubble/one zero")
+    assert model.acc == acc_before, "model sanity: acc should hold on bubble"
+
+    # phase 4: resume; picks up from the held value
     for (a, b) in [(7, 2), (3, 3)]:
-        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
-        model.step(a, b, in_valid=1)
+        await step(dut, a, b, in_a_valid = 1, in_b_valid=1, in_first=0, data_width=data_width)
+        model.step(a, b, in_a_valid = 1, in_b_valid=1)
         check(dut, model, data_width, acc_width, ctx="bubble/post")
 
 @cocotb.test()
@@ -211,11 +224,11 @@ async def test_in_first(dut):
     for i in range(5):
         a = random.randint(lo, hi)
         b = random.randint(lo, hi)
-        await step(dut, a, b, in_valid=1, in_first=0, data_width=data_width)
-        model.step(a, b, in_valid=1)
+        await step(dut, a, b, in_a_valid = 1, in_b_valid=1, in_first=0, data_width=data_width)
+        model.step(a, b, in_a_valid = 1, in_b_valid=1)
     
-    await step(dut, a, b, in_valid=1, in_first=1, data_width=data_width)
-    model.step(a, b, in_valid=1, in_first=1)
+    await step(dut, a, b, in_a_valid = 1, in_b_valid=1, in_first=1, data_width=data_width)
+    model.step(a, b, in_a_valid = 1, in_b_valid=1, in_first=1)
 
     check(dut, model, data_width, acc_width, ctx=f"accum[{i}]")
 
@@ -234,11 +247,12 @@ async def test_random_regression(dut):
     lo = -(1 << (data_width - 1))
     hi = (1 << (data_width - 1)) - 1
 
-    for i in range(200):
+    for i in range(500):
         a = random.randint(lo, hi)
         b = random.randint(lo, hi)
-        v = 1 if random.random() < 0.8 else 0
+        a_v = 1 if random.random() < 0.8 else 0
+        b_v = 1 if random.random() < 0.8 else 0
         f = 1 if random.random() < 0.8 else 0
-        await step(dut, a, b, in_valid=v, in_first=f, data_width=data_width)
-        model.step(a, b, in_valid=v, in_first=f)
+        await step(dut, a, b, in_a_valid = a_v, in_b_valid=b_v, in_first=f, data_width=data_width)
+        model.step(a, b, in_a_valid = a_v, in_b_valid=b_v, in_first=f)
         check(dut, model, data_width, acc_width, ctx=f"rand[{i}]")

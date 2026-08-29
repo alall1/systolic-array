@@ -21,6 +21,14 @@ from utils import to_signed, to_unsigned, golden_matmul, build_skew_schedule
 
 CLK_PERIOD_NS = 10
 
+RECT_SHAPES = [
+    (3, 5, 4),   # fully asymmetric
+    (1, 5, 4),   # M=1
+    (3, 5, 1),   # N=1
+    (3, 1, 4),   # K=1
+    (1, 1, 1),   # degenerate
+]
+
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
@@ -31,13 +39,14 @@ def get_params(dut):
 async def start_clock(dut):
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
 
-async def reset_dut(dut, N, data_width, cycles=2):
+async def reset_dut(dut, P, data_width, cycles=2):
     dut.rst_n.value = 0
-    dut.inp_valid.value = 0
     dut.inp_first.value = 0
-    for i in range(N):
+    for i in range(P):
         dut.a_in[i].value = 0
         dut.b_in[i].value = 0
+        dut.a_valid[i].value = 0
+        dut.b_valid[i].value = 0
     for _ in range(cycles):
         await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
@@ -54,41 +63,50 @@ async def wait_out_ready(dut, timeout_cycles):
             return True
     return False
 
-def read_out_grid(dut, N, acc_width):
-    """Read the NxN accumulator grid as signed ints"""
-    grid = np.zeros((N, N), dtype=object)
-    for i in range(N):
+def read_out_grid(dut, acc_width, M=None, N=None):
+    """Read the acc grid as signed ints. Defaults to the full PxP array; pass
+    M, N to read only the top-left MxN sub-region."""
+    P = int(dut.N.value)
+    if M is None:
+        M = P
+    if N is None:
+        N = P
+    grid = np.zeros((M, N), dtype=object)
+    for i in range(M):
         for j in range(N):
             grid[i][j] = to_signed(int(dut.out[i][j].value), acc_width)
     return grid
 
-async def run_matmul(dut, A, B, data_width, acc_width, N):
-    """Drive one A@B through the grid and return the read-out acc grid"""
-    a_in, b_in, n_cycles = build_skew_schedule(A, B)
+async def drive_schedule(dut, A, B, P, data_width, first=False):
+    """Drive one A@B (MxK * KxN) through a PxP grid using the unified skew schedule with per-direction valids. Returns n_cycles driven."""
+    a_dat, a_val, b_dat, b_val, n_cycles = build_skew_schedule(A, B, P)
 
-    # Drive the skewed streams; inp_valid high whole time to not screw up matmuls
-    dut.inp_valid.value = 1
     for t in range(n_cycles):
-        dut.inp_first.value = 1 if t == 0 else 0    # inp_first is high only for the very first cycle of the matmul
-        for i in range(N):
-            dut.a_in[i].value = to_unsigned(a_in[i][t], data_width)
-        for j in range(N):
-            dut.b_in[j].value = to_unsigned(b_in[j][t], data_width)
+        if first:
+            dut.inp_first.value = 1 if t == 0 else 0
+        for i in range(P):
+            dut.a_in[i].value = to_unsigned(a_dat[i][t], data_width)
+            dut.b_in[i].value = to_unsigned(b_dat[i][t], data_width)
+            dut.a_valid[i].value = a_val[i][t]
+            dut.b_valid[i].value = b_val[i][t]
         await RisingEdge(dut.clk)
         await Timer(1, unit="ns")
 
-    # Feed zeros but keep valid high while waiting for out_ready to assert.
-    for i in range(N):
+    for i in range(P):
         dut.a_in[i].value = 0
         dut.b_in[i].value = 0
+        dut.a_valid[i].value = 0
+        dut.b_valid[i].value = 0
+    return n_cycles
 
-    # Generous timeout: schedule length plus slack.
-    got_out_ready = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
-    assert got_out_ready, (
+async def run_matmul(dut, A, B, data_width, acc_width, N, first=False):
+    """Square convenience wrapper: drive NxN * NxN, wait out_ready, read grid."""
+    n_cycles = await drive_schedule(dut, A, B, N, data_width, first=first)
+    ok = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
+    assert ok, (
         f"out_ready never asserted within timeout for N={N}; "
         f"check the grid's out_ready counter/FSM")
-
-    return read_out_grid(dut, N, acc_width)
+    return read_out_grid(dut, acc_width)
 
 def check_grid(got, expected, ctx=""):
     prefix = f"[{ctx}] " if ctx else ""
@@ -96,38 +114,67 @@ def check_grid(got, expected, ctx=""):
         raise AssertionError(
             f"{prefix}matmul mismatch\ngot=\n{got}\nexpected=\n{expected}")
 
+def inactive_pes(M, N, P):
+    """PEs that must stay idle: dead rows (i>=M) UNION dead cols (j>=N)."""
+    return {(i, j) for i in range(P) for j in range(P) if (i >= M or j >= N)}
+
+class AccEnMonitor:
+    """Samples every PE's in_valid once per cycle for the whole run, recording any inactive PE ever enabled. Forked coroutine so no cycle is missed."""
+
+    def __init__(self, dut, P):
+        self.dut = dut
+        self.P = P
+        self.ever_enabled = set()
+        self._stop = False
+
+    async def run(self):
+        while not self._stop:
+            await RisingEdge(self.dut.clk)
+            await Timer(1, unit="ns")
+            for i in range(self.P):
+                for j in range(self.P):
+                    if int(get_pe_valid(self.dut, i, j).value) == 1:
+                        self.ever_enabled.add((i, j))
+
+    def stop(self):
+        self._stop = True
+
+def get_pe_valid(dut, i, j):
+    """Handle to PE(i,j)'s in_valid to check if it is computing a MAC"""
+    return dut.row_loop[i].col_loop[j].pe.in_valid
+
 # --------------------------------------------------------------------------- #
 # tests
 # --------------------------------------------------------------------------- #
 
 @cocotb.test()
+async def test_zeros(dut):
+    """All-zero operands -> all-zero result"""
+    data_width, acc_width, P = get_params(dut)
+    await start_clock(dut)
+    await reset_dut(dut, P, data_width)
+
+    A = np.zeros((P, P), dtype=int)
+    B = np.zeros((P, P), dtype=int)
+    got = await run_matmul(dut, A, B, data_width, acc_width, P)
+    check_grid(got, golden_matmul(A, B), ctx="zeros")
+
+@cocotb.test()
 async def test_identity(dut):
     """A @ I == A: a simple, readable first case"""
-    data_width, acc_width, N = get_params(dut)
+    data_width, acc_width, P = get_params(dut)
     await start_clock(dut)
-    await reset_dut(dut, N, data_width)
+    await reset_dut(dut, P, data_width)
 
-    A = np.arange(1, N * N + 1).reshape(N, N)
-    B = np.eye(N, dtype=int)
-    got = await run_matmul(dut, A, B, data_width, acc_width, N)
+    A = np.arange(1, P * P + 1).reshape(P, P)
+    B = np.eye(P, dtype=int)
+    got = await run_matmul(dut, A, B, data_width, acc_width, P)
     check_grid(got, golden_matmul(A, B), ctx="identity")
 
 @cocotb.test()
-async def test_single_matmul(dut):
-    """A fixed small case verifiable by hand"""
-    data_width, acc_width, N = get_params(dut)
-    await start_clock(dut)
-    await reset_dut(dut, N, data_width)
-
-    A = (np.arange(N * N).reshape(N, N) % 5) + 1
-    B = ((np.arange(N * N).reshape(N, N) * 2) % 7) - 3
-    got = await run_matmul(dut, A, B, data_width, acc_width, N)
-    check_grid(got, golden_matmul(A, B), ctx="small_known")
-
-@cocotb.test()
 async def test_random_matmul(dut):
-    """Randomized A, B across many trials; NOT for consecutive matmuls--fresh reset per trial"""
-    data_width, acc_width, N = get_params(dut)
+    """Randomized A, B across many trials; NOT for consecutive matmuls--fresh reset per trial. Grid-size square matmuls only"""
+    data_width, acc_width, P = get_params(dut)
     await start_clock(dut)
 
     hi = (1 << (data_width - 1)) - 1
@@ -135,37 +182,99 @@ async def test_random_matmul(dut):
     bound = max(2, min(hi, 1 << (data_width // 2)))
 
     for trial in range(30):
-        await reset_dut(dut, N, data_width)
-        A = np.random.randint(-bound, bound, size=(N, N))
-        B = np.random.randint(-bound, bound, size=(N, N))
-        got = await run_matmul(dut, A, B, data_width, acc_width, N)
+        await reset_dut(dut, P, data_width)
+        A = np.random.randint(-bound, bound, size=(P, P))
+        B = np.random.randint(-bound, bound, size=(P, P))
+        got = await run_matmul(dut, A, B, data_width, acc_width, P)
         check_grid(got, golden_matmul(A, B), ctx=f"rand[{trial}]")
 
 @cocotb.test()
-async def test_consecutive_matmul(dut):
-    """Testing consecutive matmuls with no reset in-between; tests 'first' signal propagation"""
-    data_width, acc_width, N = get_params(dut)
+async def test_rectangular_matmul(dut):
+    """
+    Rectangular MxK * KxN, fresh reset per shape. Two checks per shape:
+      (1) active MxN sub-region equals numpy A@B
+      (2) inactive PEs (i>=M OR j>=N) never raise in_valid (continuous sample)
+    """
+    data_width, acc_width, P = get_params(dut)
     await start_clock(dut)
-    await reset_dut(dut, N, data_width)   # ONE reset, at the very start only
 
-    hi = (1 << (data_width - 1)) - 1
-    # Keep operands modest so N-term sums stay well inside ACC_WIDTH.
-    bound = max(2, min(hi, 1 << (data_width // 2)))
+    for (M, K, N) in RECT_SHAPES:
+        if M > P or N > P:
+            continue
+        await reset_dut(dut, P, data_width)
 
-    for trial in range(30):
-        A = np.random.randint(-bound, bound, size=(N, N))
-        B = np.random.randint(-bound, bound, size=(N, N))
-        got = await run_matmul(dut, A, B, data_width, acc_width, N)
-        check_grid(got, golden_matmul(A, B), ctx=f"multi[{trial}]")
+        # fresh monitor per shape so violations don't bleed across shapes
+        monitor = AccEnMonitor(dut, P)
+        mon_task = cocotb.start_soon(monitor.run())
+
+        rng = np.random.default_rng(hash((M, K, N)) & 0xFFFF)
+        A = rng.integers(-4, 4, size=(M, K))
+        B = rng.integers(-4, 4, size=(K, N))
+
+        n_cycles = await drive_schedule(dut, A, B, P, data_width)
+        ok = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
+        assert ok, f"out_ready never asserted for M={M},K={K},N={N}"
+
+        # let the monitor catch trailing enables, then stop it
+        for _ in range(2):
+            await RisingEdge(dut.clk)
+            await Timer(1, unit="ns")
+        monitor.stop()
+
+        # (1) correctness on the active sub-region
+        got = read_out_grid(dut, acc_width, M, N)
+        exp = golden_matmul(A, B)
+        if not np.array_equal(got, exp):
+            raise AssertionError(
+                f"[M={M},K={K},N={N}] active MxN mismatch\n"
+                f"got=\n{got}\nexpected=\n{exp}")
+
+        # (2) inactive PEs stayed idle
+        violations = sorted(inactive_pes(M, N, P) & monitor.ever_enabled)
+        assert not violations, f"[M={M},K={K},N={N}] inactive PEs raised in_valid (should be idle): {violations}"
 
 @cocotb.test()
-async def test_zeros(dut):
-    """All-zero operands -> all-zero result"""
-    data_width, acc_width, N = get_params(dut)
+async def test_consecutive_matmul(dut):
+    """
+    Consecutive matmuls of RANDOM shapes (square or rectangular), NO reset between them. 
+    Checks per matmul: 
+    (1) active MxN sub-region equals A@B,
+    (2) inactive PEs (i>=M OR j>=N) never raised in_valid during that matmul.
+    """
+    data_width, acc_width, P = get_params(dut)
     await start_clock(dut)
-    await reset_dut(dut, N, data_width)
+    await reset_dut(dut, P, data_width)   # ONE reset at the very start only
 
-    A = np.zeros((N, N), dtype=int)
-    B = np.zeros((N, N), dtype=int)
-    got = await run_matmul(dut, A, B, data_width, acc_width, N)
-    check_grid(got, golden_matmul(A, B), ctx="zeros")
+    monitor = AccEnMonitor(dut, P)
+    cocotb.start_soon(monitor.run())
+
+    rng = np.random.default_rng(20260829)
+    for trial in range(30):
+        M = int(rng.integers(1, P + 1))
+        N = int(rng.integers(1, P + 1))
+        K = int(rng.integers(1, 7))
+        A = rng.integers(-4, 4, size=(M, K))
+        B = rng.integers(-4, 4, size=(K, N))
+
+        # snapshot enables seen so far; anything new is from THIS matmul
+        before = set(monitor.ever_enabled)
+
+        n_cycles = await drive_schedule(dut, A, B, P, data_width, first=True)
+        ok = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
+        assert ok, f"out_ready never asserted for trial {trial} (M={M},K={K},N={N})"
+
+        # let the monitor catch trailing enables before diffing
+        for _ in range(2):
+            await RisingEdge(dut.clk)
+            await Timer(1, unit="ns")
+
+        # (1) active sub-region correctness
+        got = read_out_grid(dut, acc_width, M, N)
+        exp = golden_matmul(A, B)
+        if not np.array_equal(got, exp):
+            raise AssertionError(f"consecutive[{trial}] M={M},K={K},N={N} mismatch got={got.tolist()} expected={exp.tolist()}")
+
+        # (2) no inactive PE was enabled during this matmul
+        enabled_this = monitor.ever_enabled - before
+        violations = sorted(inactive_pes(M, N, P) & enabled_this)
+        assert not violations, f"consecutive[{trial}] M={M},K={K},N={N} inactive PEs raised in_valid: {violations}"

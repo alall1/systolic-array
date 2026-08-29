@@ -25,33 +25,38 @@ def golden_matmul(A, B):
     """The golden model for matmuls"""
     return np.asarray(A) @ np.asarray(B)
 
-def build_skew_schedule(A, B):
-    """
-    Return (a_in, b_in, n_cycles).
+def build_skew_schedule(A, B, P=None):
+    """Rectangular skew schedule with per-direction valids. Subsumes the old
+    square builder: pass square A, B (P defaults to N) for identical data
+    streams, plus valids.
 
-    a_in[i][t] = value to drive into the LEFT edge of grid row i at cycle t.
-    b_in[j][t] = value to drive into the TOP  edge of grid col j at cycle t.
-    n_cycles   = number of clock cycles to run so the array fully fills and drains; after this many active cycles every acc[i][j] holds the final out[i][j].
-
-    Positions not fed by real data are 0 (safe: zero multiplies to zero -> no accumulate)
+    Returns a_dat, a_val, b_dat, b_val, n_cycles -- each indexed [edge][cycle].
+    Rows i>=M and cols j>=N are all zero with valid low.
     """
     A = np.asarray(A)
     B = np.asarray(B)
-    N = A.shape[0]
-    assert A.shape == (N, N) and B.shape == (N, N), "square NxN only (for now)"
+    M, K = A.shape
+    K2, N = B.shape
+    assert K == K2, f"inner dims must match: A is {A.shape}, B is {B.shape}"
 
-    # A value A[i][k] must reach PE(i,j) at the right time for every j; the edge injection is delayed by the row index i. The last useful value
-    # enters at cycle (N-1)+(N-1) and needs another N-1 to propagate to the far corner, so 3N is a safe upper bound. We use the tight value below.
-    n_cycles = 3 * N
+    if P is None:
+        P = max(M, N)
+    assert M <= P and N <= P, f"array {P}x{P} too small for {M}x{K} * {K}x{N}"
 
-    a_in = [[0] * n_cycles for _ in range(N)]
-    b_in = [[0] * n_cycles for _ in range(N)]
+    n_cycles = (P - 1) + (K - 1) + (P - 1) + 1 + 2  # far-corner drain + slack
 
-    for i in range(N):
-        for k in range(N):
-            a_in[i][i + k] = int(A[i][k])   # row i, delayed by i
+    a_dat = [[0] * n_cycles for _ in range(P)]
+    a_val = [[0] * n_cycles for _ in range(P)]
+    b_dat = [[0] * n_cycles for _ in range(P)]
+    b_val = [[0] * n_cycles for _ in range(P)]
+
+    for i in range(M):
+        for k in range(K):
+            a_dat[i][i + k] = int(A[i][k])
+            a_val[i][i + k] = 1
     for j in range(N):
-        for k in range(N):
-            b_in[j][j + k] = int(B[k][j])   # col j, delayed by j
+        for k in range(K):
+            b_dat[j][j + k] = int(B[k][j])
+            b_val[j][j + k] = 1
 
-    return a_in, b_in, n_cycles
+    return a_dat, a_val, b_dat, b_val, n_cycles

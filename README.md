@@ -41,3 +41,9 @@ Notes
  
  	  <img width="619" height="472" alt="first_propagation" src="https://github.com/user-attachments/assets/9b519eac-2b44-44d8-88f8-042022de8af4" />
 
+ - for rectangular matmuls (MxK * KxN), a regular systolic array setup with all PEs completing a MAC every cycle would work (note that M <= n and N <= n for an nxn array); nothing would be added to the accumulators of the unused PEs, since 0 * anything = 0. However, this introduces two problems:
+	1. energy; a zero-multiply still uses the multiplier and accumulator every cycle, even if it is adding nothing to the accumulated sum. On real silicon, MAC is the dominant dynamic-power consumer. Feeding zeros through unused PEs for a small matmul burns power for guaranteed-zero results
+	2. the feeder would need to feed in zeroes to the rows/columns of the array that don't exist in A and B; correctness relies on the feeder being perfect with injecting exactly zero into every unused position at every cycle. Any garbage values that leak in corrupts a PE which you then need to remember to ignore.
+- my solution to this is two have two valid signals propagating alongside the inputs: a_valid and b_valid. With every element of matrix A and matrix B, a_valid and b_valid propagate through the array with them. Each PE has an internal signal, in_valid, that decides whether they perform a MAC during a cycle or not; in_valid is only high if BOTH a_valid and b_valid are high--a_valid propagates rightwards with the matrix A values and b_valid propagates downwards with the matrix B values, so if and only if both operands coming into a PE from matrices A and B are real, then the PE will MAC.
+
+

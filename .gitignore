@@ -8,3 +8,4 @@ results.xml
 venv/
 sim_build/
 frames/
+.DS_Store

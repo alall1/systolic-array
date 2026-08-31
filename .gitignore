@@ -9,3 +9,4 @@ venv/
 sim_build/
 frames/
 .DS_Store
+__pycache__/

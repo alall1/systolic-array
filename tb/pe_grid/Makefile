@@ -18,7 +18,7 @@ COCOTB_TEST_MODULES = test_pe_grid
 export PYTHONPATH := $(PWD)/../common:$(PYTHONPATH)
 
 # grid size + widths
-GRID_N ?= 3
+GRID_N ?= 5
 COMPILE_ARGS += -GDATA_WIDTH=8 -GACC_WIDTH=32 -GN=$(GRID_N)
 EXTRA_ARGS   += --trace --trace-structs
 

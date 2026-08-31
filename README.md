@@ -59,7 +59,11 @@ Notes
 		3. timing: a bus routed from the middle of the array to the edge is long, so it may be hard to close timing on. Neighbor-to-neighbor drain wires are short and pipelined, so they run at full clock. Wires directly from the interior would force a slower clock or add pipeline stages on the long buses, which would just be a worse version of the shift-chain.
 	- the drain solution: have a shift-chain that drains PEs from neighbor-to-neighbor, rightwards or downwards (chose downwards for this design). The accumulated sum drains downward each cycle, completely draining after n cycles in an nxn array. However, draining creates an extra phase, meaning worst case matmuls would finish every 3n - 2 (compute phase) + n (drain phase) cycles.
 		- instead of having completely separate compute and drain phases, they can be overlapped; while the current matmul is computing, the previous matmul is simultaneously draining. This can be done with double-buffering; adding a separate "shadow acc" to each PE that copies the value of acc when "capture" is asserted. There are 3 setups, scaling in complexity but scaling throughput (NOT LATENCY, each matmul still takes 4n - 2 cycles to compute + drain in all 3 setups)
-			1. broadcast capture: after 3n - 2 cycles, when the last PE finishes computing, broadcast a single "capture" signal to all PEs; all accumulated sums are captured to the shadow buffers and the array is free to start computing again. However,capture can only be asserted once the last PE finishes its MACs, and the other PEs sit idle. Matmuls are completed (and drained) every 3n - 2 cycles; throughput = 1 / (3n - 2).
+			1. broadcast-capture: after 3n - 2 cycles, when the last PE finishes computing, broadcast a single "capture" signal to all PEs; all accumulated sums are captured to the shadow buffers and the array is free to start computing again. However,capture can only be asserted once the last PE finishes its MACs, and the other PEs sit idle. Matmuls are completed (and drained) every 3n - 2 cycles; throughput = 1 / (3n - 2).
+  				- visualization of broadcast-capture double-buffer setup:  
+
+					<img width="616.5" height="398.25" alt="broadcast-capture" src="https://github.com/user-attachments/assets/3b7d31c1-04bb-4bba-99f6-e767c00f46ce" />
+
 			2. skewed, propagating capture: (2n cycles between matmuls)
 			3. triple-buffer propagating capture: (n cycles between matmuls)
 

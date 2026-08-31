@@ -4,16 +4,22 @@
 Current progress
 - [x] PE module complete and tested
 - [x] PE grid module complete and tested
+	- [x] consecutive matmuls
+	- [x] MxK * KxN matmul support (PEs outside active range, MxN, are completely inactive)
+	- [ ] double-buffer draining
+		- [ ] broadcast capture (3n - 2 cycles between matmuls)
+		- [ ] skewed propagating capture (2n cycles between matmuls)
+		- [ ] triple buffer propagating capture (n cycles between matmuls)
 - [ ] feeder module complete and tested
 - [ ] control FSM module complete and tested
 - [ ] collector module complete and tested
 - [ ] top module complete and tested
 
 Notes
-- cycles to complete a matmul: K + 2(N-1)
+- this design is *output-stationary*, meaning two matrices (e.g. weights and activations) stream in at the same time and the output matrix is "stationary", staying in each PE. 
+- cycles to complete a matmul: K + (M-1) + (N-1)
 	- K = accumulation depth / contraction dimension; A (M,K) * B (K, N) = C (M, N); the number of multiply-accumulates each PE does in a single matmul
-	- however, for NxN * NxN matmul, first PE (top-left-most PE) finishes after 2(N-1) cycles; sits idle until last PE (bottom-right-most PE) finishes K cycles later
-		- to reduce PE idle time, read the accumulators in the same cascading way that operands propagate through the grid; read acc[0][0] at 2(N-1), then acc[0][1] and acc[1][0] at 2(N-1) + 1, then read acc[0][2], acc[2][0], and acc[1][1] at 2(N-1) + 2, etc. This way, PEs can be freed up to start on the next matmul instead of idly waiting for their output to be read; also brings up the question of draining output
+	- however, for nxn * nxn matmul, first PE (top-left-most PE) finishes after n cycles; sits idle until last PE (bottom-right-most PE) finishes 2n - 2 cycles later unless the feeder starts streaming the values for the next matmul after N cycles.
  - for consecutive matmuls propagate signal 'first' through the array, which "clears" each accumulator by appending just the product in the multiply-accumulate flow; doesn't waste a cycle like propagating an 'acc_clear' signal would, because instead of zeroing the accumulators 'first' instead appends the first multiply-accumulate product of the next matmul for each PE.
 	- having the following code wouldn't work, because the in_first_bus can't have multiple drivers (is a `logic` bus):
  	```
@@ -41,9 +47,20 @@ Notes
  
  	  <img width="619" height="472" alt="first_propagation" src="https://github.com/user-attachments/assets/9b519eac-2b44-44d8-88f8-042022de8af4" />
 
- - for rectangular matmuls (MxK * KxN), a regular systolic array setup with all PEs completing a MAC every cycle would work (note that M <= n and N <= n for an nxn array); nothing would be added to the accumulators of the unused PEs, since 0 * anything = 0. However, this introduces two problems:
+- for rectangular matmuls (MxK * KxN), a regular systolic array setup with all PEs completing a MAC every cycle would work (note that M <= n and N <= n for an nxn array); nothing would be added to the accumulators of the unused PEs, since 0 * anything = 0. However, this introduces two problems:
 	1. energy; a zero-multiply still uses the multiplier and accumulator every cycle, even if it is adding nothing to the accumulated sum. On real silicon, MAC is the dominant dynamic-power consumer. Feeding zeros through unused PEs for a small matmul burns power for guaranteed-zero results
 	2. the feeder would need to feed in zeroes to the rows/columns of the array that don't exist in A and B; correctness relies on the feeder being perfect with injecting exactly zero into every unused position at every cycle. Any garbage values that leak in corrupts a PE which you then need to remember to ignore.
 - my solution to this is two have two valid signals propagating alongside the inputs: a_valid and b_valid. With every element of matrix A and matrix B, a_valid and b_valid propagate through the array with them. Each PE has an internal signal, in_valid, that decides whether they perform a MAC during a cycle or not; in_valid is only high if BOTH a_valid and b_valid are high--a_valid propagates rightwards with the matrix A values and b_valid propagates downwards with the matrix B values, so if and only if both operands coming into a PE from matrices A and B are real, then the PE will MAC.
+
+- reading the output matrix by reaching into each PE's accumulator is something the testbench can do, but is impractical in real hardware because of wiring and I/O. 
+	- if every PE exposes its accumulator as an output that leaves the nxn array, you need n<sup>2</sup> result buses routed from the interior of the array all the way to the edge, or to n<sup>2</sup> output ports. This creates a few problems:
+		1. routing congestion: PEs in the middle of the array are physically surrounded by other PEs; to read one of them directly, its accumulator bus needs to route over or through the region occupied by the other PEs to reach the edges. For all n<sup>2</sup> PEs, you have n<sup>2</sup> buses that are acc bits wide crossing the array. Wire area grows as n<sup>2</sup> times acc-width, and competes for the area the PEs need for their own connections, causing interior routing congestion.
+		2. I/O port count: if the module exposes n<sup>2</sup> accumulator ports as output, that is n<sup>2</sup> * acc-width output pins; for larger arrays, it creates many output pins (n = 16, 32-bit acc -> 8192 output pins)
+		3. timing: a bus routed from the middle of the array to the edge is long, so it may be hard to close timing on. Neighbor-to-neighbor drain wires are short and pipelined, so they run at full clock. Wires directly from the interior would force a slower clock or add pipeline stages on the long buses, which would just be a worse version of the shift-chain.
+	- the drain solution: have a shift-chain that drains PEs from neighbor-to-neighbor, rightwards or downwards (chose downwards for this design). The accumulated sum drains downward each cycle, completely draining after n cycles in an nxn array. However, draining creates an extra phase, meaning worst case matmuls would finish every 3n - 2 (compute phase) + n (drain phase) cycles.
+		- instead of having completely separate compute and drain phases, they can be overlapped; while the current matmul is computing, the previous matmul is simultaneously draining. This can be done with double-buffering; adding a separate "shadow acc" to each PE that copies the value of acc when "capture" is asserted. There are 3 setups, scaling in complexity but scaling throughput (NOT LATENCY, each matmul still takes 4n - 2 cycles to compute + drain in all 3 setups)
+			1. broadcast capture: after 3n - 2 cycles, when the last PE finishes computing, broadcast a single "capture" signal to all PEs; all accumulated sums are captured to the shadow buffers and the array is free to start computing again. However,capture can only be asserted once the last PE finishes its MACs, and the other PEs sit idle. Matmuls are completed (and drained) every 3n - 2 cycles; throughput = 1 / (3n - 2).
+			2. skewed, propagating capture: (2n cycles between matmuls)
+			3. triple-buffer propagating capture: (n cycles between matmuls)
 
 

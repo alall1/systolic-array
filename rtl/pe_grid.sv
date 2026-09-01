@@ -41,17 +41,26 @@ generate
             ) pe (
                 .clk(clk),
                 .rst_n(rst_n),
-                .in_a(a_bus[row][col]),             // from left neighbor [row][col-1]
-                .in_b(b_bus[row][col]),             // from top neighbor [row-1][col]
+
+                .in_a(a_bus[row][col]),                 // from left neighbor [row][col-1]
+                .in_b(b_bus[row][col]),                 // from top neighbor [row-1][col]
+                .out_a(a_bus[row][col+1]),              // giving A value to right neighbor
+                .out_b(b_bus[row+1][col]),              // giving B value to bottom neighbor
+
                 .in_a_valid(a_valid_bus[row][col]),
                 .in_b_valid(b_valid_bus[row][col]),
-                .in_first(in_first_bus[row][col]),  // from top OR left neighbor, continuous assign
-                .out_a(a_bus[row][col+1]),          // giving A value to right neighbor
-                .out_b(b_bus[row+1][col]),          // giving B value to bottom neighbor
-                .acc(out[row][col]),
                 .out_a_valid(a_valid_bus[row][col+1]),
                 .out_b_valid(b_valid_bus[row+1][col]),
-                .out_first(out_first_bus[row][col]) // becomes first[row+1][col] AND first[row][col+1], propagating first signal from PE to PE
+
+                .in_first(in_first_bus[row][col]),
+                .out_first(out_first_bus[row][col]),
+                
+                .acc(out[row][col]),
+
+                .capture(1'b0),
+                .shift_en(1'b0),
+                .in_shadow('0),
+                .out_shadow()
             );
         end : col_loop
     end : row_loop

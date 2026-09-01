@@ -5,7 +5,7 @@ A hardware matrix-multiplication accelerator built on a systolic array of proces
 
 Next steps: implement payloads, to simplify logic for propagating values + signals
 
-Current progress
+### Current progress
 - [x] PE module complete and tested
 - [x] PE grid module complete and tested
 	- [x] consecutive matmuls
@@ -19,7 +19,7 @@ Current progress
 - [ ] collector module complete and tested
 - [ ] top module complete and tested
 
-Notes
+### Notes
 - this design is *output-stationary*, meaning two matrices (e.g. weights and activations) stream in at the same time and the output matrix is "stationary", staying in each PE. 
 - cycles to complete a matmul: K + (M-1) + (N-1)
 	- K = accumulation depth / contraction dimension; A (M,K) * B (K, N) = C (M, N); the number of multiply-accumulates each PE does in a single matmul

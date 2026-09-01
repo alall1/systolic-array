@@ -1,6 +1,10 @@
 # Systolic Array Project
 ### Anuj Lall
 
+A hardware matrix-multiplication accelerator built on a systolic array of processing elements (PEs). Each PE does a multiply-accumulate; operands stream through the grid diagonally skewed, and results accumulate in place (output-stationary). Larger matrices will be handled by tiling over M, N, and the K reduction dimension. Memory is kept dumb — all intelligence lives in the feeder, address generator, and control FSM.
+
+Next steps: implement payloads, to simplify logic for propagating values + signals
+
 Current progress
 - [x] PE module complete and tested
 - [x] PE grid module complete and tested
@@ -67,4 +71,25 @@ Notes
 			2. skewed, propagating capture: (2n cycles between matmuls)
 			3. triple-buffer propagating capture: (n cycles between matmuls)
 
+### Future work
 
+**dummy memory + feeder / address generator** Flat, row-major memories (`address = base + row*stride + col`) for inputs and output. The real work is the feeder that walks tiles from flat memory and produces the skewed operand streams — the memory itself is trivial.
+
+**control FSM with tiling loops** Nested loops over output tiles (M, N) with an inner K-reduction. Emits control signals only (`first_tile`, `load_en`, `drain_en`, addresses) and never touches data. Asserts `first_tile` on `k == 0`, skewed to the array diagonal. Keep the loop-nest counters separate from the array's internal cycle counter.
+
+**valid/ready handshake interfaces** Explicit transfer contract on feeder→array and array→output: a transfer happens only when `valid && ready`. `valid` must not depend combinationally on `ready`; once high, data stays stable until the transfer completes. Backpressure propagates — a stalled output freezes the array with no dropped results. Optionally AXI-Stream naming, deliberately not full AXI4-MM.
+
+**Double buffering / ping-pong***
+Overlap load and compute so the array never idles on a load.
+
+```
+        ┌──────────┐  read    ┌───────────┐
+        │ Buffer A │─────────▶│  PE grid  │
+        └──────────┘          └───────────┘
+        ┌──────────┐  write (loading next tile)
+ mem ──▶│ Buffer B │
+        └──────────┘
+   swap when current compute drains AND next load completes
+```
+
+read A, load B <-> read B, load A (ping pong)

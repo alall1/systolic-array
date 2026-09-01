@@ -12,6 +12,7 @@ throughout: drive inputs, `await RisingEdge(clk)` to cross the edge, then a tiny
 """
 
 import random
+import os
 
 import cocotb
 from cocotb.clock import Clock
@@ -27,9 +28,14 @@ CLK_PERIOD_NS = 10
 # --------------------------------------------------------------------------- #
 
 def get_params(dut):
-    """Read DATA_WIDTH / ACC_WIDTH from the elaborated DUT."""
-    data_width = int(dut.DATA_WIDTH.value)
-    acc_width = int(dut.ACC_WIDTH.value)
+    data_width = int(os.environ["DATA_WIDTH"])
+    acc_width  = int(os.environ["ACC_WIDTH"])
+
+    # checking: the accumulator output width should match ACC_WIDTH
+    assert len(dut.acc.value) == acc_width, (
+        f"ACC_WIDTH mismatch: env says {acc_width}, "
+        f"but dut.acc is {len(dut.acc.value)} bits — stale build or env/Makefile disagree"
+    )
     return data_width, acc_width
 
 async def start_clock(dut):

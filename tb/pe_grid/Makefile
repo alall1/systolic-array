@@ -8,8 +8,7 @@ TOPLEVEL_LANG ?= verilog
 
 RTL_DIR ?= ../../rtl
 # pe_grid instantiates pe, so BOTH sources are needed.
-VERILOG_SOURCES += $(RTL_DIR)/pe.sv
-VERILOG_SOURCES += $(RTL_DIR)/pe_grid.sv
+VERILOG_SOURCES += $(RTL_DIR)/pe_pkg.sv $(RTL_DIR)/pe.sv $(RTL_DIR)/pe_grid.sv
 
 TOPLEVEL = pe_grid
 COCOTB_TEST_MODULES = test_pe_grid
@@ -17,10 +16,18 @@ COCOTB_TEST_MODULES = test_pe_grid
 # make the shared common/ importable
 export PYTHONPATH := $(PWD)/../common:$(PYTHONPATH)
 
-# grid size + widths
-GRID_N ?= 5
-COMPILE_ARGS += -GDATA_WIDTH=8 -GACC_WIDTH=32 -GN=$(GRID_N)
+# parameters & passing them into Verilator
+DATA_WIDTH	?= 8
+ACC_WIDTH  	?= 32
+ARRAY_DIM  	?= 5
+
+COMPILE_ARGS += -DDATA_WIDTH=$(DATA_WIDTH) -DACC_WIDTH=$(ACC_WIDTH) -DARRAY_DIM=$(ARRAY_DIM)
 EXTRA_ARGS   += --trace --trace-structs
+
+# exporting parameters to testbench
+export DATA_WIDTH
+export ACC_WIDTH
+export ARRAY_DIM
 
 ifeq ($(WAVES),1)
     export COCOTB_TRACE = 1

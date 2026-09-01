@@ -1,7 +1,11 @@
-module pe #(
-    parameter DATA_WIDTH = 8,   // operand width
-    parameter ACC_WIDTH = 32    // accumulator width
-)(
+// import pe_pkg::*;
+
+module pe //#(
+//    parameter DATA_WIDTH = 8,   // operand width
+//    parameter ACC_WIDTH = 32    // accumulator width
+//)
+import pe_pkg::*;
+(
     input logic clk,
     input logic rst_n,  // active low
 

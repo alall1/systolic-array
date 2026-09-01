@@ -10,6 +10,7 @@ Driver: applies diagonal skew from build_skew_schedule, then waits on "out_ready
 """
 
 import random
+import os
 
 import cocotb
 from cocotb.clock import Clock
@@ -34,7 +35,11 @@ RECT_SHAPES = [
 # --------------------------------------------------------------------------- #
 
 def get_params(dut):
-    return (int(dut.DATA_WIDTH.value), int(dut.ACC_WIDTH.value), int(dut.N.value))
+    data_width = int(os.environ["DATA_WIDTH"])
+    acc_width  = int(os.environ["ACC_WIDTH"])
+    array_dim = int(os.environ["ARRAY_DIM"])
+
+    return data_width, acc_width, array_dim
 
 async def start_clock(dut):
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
@@ -63,10 +68,8 @@ async def wait_out_ready(dut, timeout_cycles):
             return True
     return False
 
-def read_out_grid(dut, acc_width, M=None, N=None):
-    """Read the acc grid as signed ints. Defaults to the full PxP array; pass
-    M, N to read only the top-left MxN sub-region."""
-    P = int(dut.N.value)
+def read_out_grid(dut, acc_width, P, M=None, N=None):
+    """Read the acc grid as signed ints. Defaults to the full PxP array; pass M, N to read only the top-left MxN sub-region."""
     if M is None:
         M = P
     if N is None:
@@ -99,14 +102,14 @@ async def drive_schedule(dut, A, B, P, data_width, first=False):
         dut.b_valid[i].value = 0
     return n_cycles
 
-async def run_matmul(dut, A, B, data_width, acc_width, N, first=False):
+async def run_matmul(dut, A, B, data_width, acc_width, P, first=False):
     """Square convenience wrapper: drive NxN * NxN, wait out_ready, read grid."""
-    n_cycles = await drive_schedule(dut, A, B, N, data_width, first=first)
+    n_cycles = await drive_schedule(dut, A, B, P, data_width, first=first)
     ok = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
     assert ok, (
-        f"out_ready never asserted within timeout for N={N}; "
+        f"out_ready never asserted within timeout for P={P}; "
         f"check the grid's out_ready counter/FSM")
-    return read_out_grid(dut, acc_width)
+    return read_out_grid(dut, acc_width, P)
 
 def check_grid(got, expected, ctx=""):
     prefix = f"[{ctx}] " if ctx else ""
@@ -166,7 +169,9 @@ async def test_identity(dut):
     await start_clock(dut)
     await reset_dut(dut, P, data_width)
 
-    A = np.arange(1, P * P + 1).reshape(P, P)
+    lo = -(1 << (data_width - 1))
+    hi = (1 << (data_width - 1)) - 1
+    A = np.random.randint(lo, hi + 1, size=(P, P))   # fits in DATA_WIDTH
     B = np.eye(P, dtype=int)
     got = await run_matmul(dut, A, B, data_width, acc_width, P)
     check_grid(got, golden_matmul(A, B), ctx="identity")
@@ -222,7 +227,7 @@ async def test_rectangular_matmul(dut):
         monitor.stop()
 
         # (1) correctness on the active sub-region
-        got = read_out_grid(dut, acc_width, M, N)
+        got = read_out_grid(dut, acc_width, P, M, N)
         exp = golden_matmul(A, B)
         if not np.array_equal(got, exp):
             raise AssertionError(
@@ -269,7 +274,7 @@ async def test_consecutive_matmul(dut):
             await Timer(1, unit="ns")
 
         # (1) active sub-region correctness
-        got = read_out_grid(dut, acc_width, M, N)
+        got = read_out_grid(dut, acc_width, P, M, N)
         exp = golden_matmul(A, B)
         if not np.array_equal(got, exp):
             raise AssertionError(f"consecutive[{trial}] M={M},K={K},N={N} mismatch got={got.tolist()} expected={exp.tolist()}")

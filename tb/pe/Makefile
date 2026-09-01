@@ -8,7 +8,7 @@ SIM ?= verilator
 TOPLEVEL_LANG ?= verilog
  
 RTL_DIR ?= ../../rtl
-VERILOG_SOURCES += $(RTL_DIR)/pe.sv
+VERILOG_SOURCES += $(RTL_DIR)/pe_pkg.sv $(RTL_DIR)/pe.sv
 
 TOPLEVEL = pe
 COCOTB_TEST_MODULES = test_pe
@@ -16,8 +16,16 @@ COCOTB_TEST_MODULES = test_pe
 # make the shared common/ importable
 export PYTHONPATH := $(PWD)/../common:$(PYTHONPATH)
 
-COMPILE_ARGS += -GDATA_WIDTH=8 -GACC_WIDTH=32
+# parameters & passing them into Verilator
+DATA_WIDTH ?= 8
+ACC_WIDTH  ?= 32
+
+COMPILE_ARGS += -DDATA_WIDTH=$(DATA_WIDTH) -DACC_WIDTH=$(ACC_WIDTH)
 EXTRA_ARGS   += --trace --trace-structs
+
+# exporting parameters to testbench
+export DATA_WIDTH
+export ACC_WIDTH
  
 ifeq ($(WAVES),1)
     export COCOTB_TRACE = 1

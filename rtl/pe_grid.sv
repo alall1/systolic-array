@@ -14,6 +14,9 @@ module pe_grid #(
     output logic out_ready                                  // when outputs are ready to read; for now, after K + 2(N-1) cycles, when all PEs are done, but for future, after 2(N-1) cycles first PE output finishes and can be read in a ripple fashion
 );
 
+localparam int FINISH = 3*N - 2;                // baked-in number of clock cycles until the NxN matmul is finished. 3N - 2, because only doing NxN * NxN matmuls FOR NOW. Change to 2(N - 1) later for ripple output
+localparam int CNT_WIDTH = $clog2(FINISH + 1);  // calculating the number of bits needed to count up to FINISH; indexed at 0 so counter = FINISH - 1 when complete
+
 logic [DATA_WIDTH-1:0] a_bus [0:N-1][0:N];      // bus of all horizontal connections between PEs, 0:N columns because of rightmost PEs' out_a / out_b signals (unused)
 logic [DATA_WIDTH-1:0] b_bus [0:N][0:N-1];      // bus of all vertical connections between PEs, O:N rows because of bottom PEs' out_a / out_b signals
 
@@ -24,9 +27,6 @@ logic in_first_bus [0:N][0:N];                  // bus of all PE "in_first" pins
 assign in_first_bus[0][0] = inp_first;          // assigning the top-left PE (first to receive operands) to grid-level inp_first, which will then ripple through PEs, effectively "resetting" them for the next matmul
 
 logic out_first_bus [0:N-1][0:N-1];             // bus of all PE "out_first" pins; each corresponds to a single PE; drives in_first_bus
-
-localparam int FINISH = 3*N - 2;                // baked-in number of clock cycles until the NxN matmul is finished. 3N - 2, because only doing NxN * NxN matmuls FOR NOW. Change to 2(N - 1) later for ripple output
-localparam int CNT_WIDTH = $clog2(FINISH + 1);  // calculating the number of bits needed to count up to FINISH; indexed at 0 so counter = FINISH - 1 when complete
 
 logic [CNT_WIDTH-1:0] count;
 

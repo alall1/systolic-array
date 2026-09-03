@@ -31,11 +31,6 @@ always_ff @(posedge clk or negedge rst_n) begin
         acc <= '0;
         out_shadow <= '0;
     end else begin
-        // shadow buffer logic
-        if (capture) out_shadow <= acc;
-        else if (shift_en) out_shadow <= in_shadow;
-        else out_shadow <= out_shadow;
-
         // operands propagate as long as rst_n is HIGH
         out_a <= in_a;
         out_b <= in_b;
@@ -43,6 +38,11 @@ always_ff @(posedge clk or negedge rst_n) begin
         // valid logic
         if (in_valid) acc <= (in_a.first) ? (in_a.data * in_b.data) : (acc + (in_a.data * in_b.data));  // multiply accumulate; if in_first, reset to multiply product
         else acc <= acc; // acc keeps its value instead of resetting to 0
+
+        // shadow buffer logic
+        if (capture) out_shadow <= acc;
+        else if (shift_en) out_shadow <= in_shadow;
+        else out_shadow <= out_shadow;
     end
 end
 

@@ -19,7 +19,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge, Timer
 
 from pe_model import PEModel
-from utils import to_signed, to_unsigned
+from utils import to_signed, to_unsigned, pack_a, unpack_a, pack_b, unpack_b
 
 CLK_PERIOD_NS = 10
 
@@ -46,9 +46,6 @@ async def reset_dut(dut, cycles: int = 2):
     dut.rst_n.value = 0
     dut.in_a.value = 0
     dut.in_b.value = 0
-    dut.in_a_valid.value = 0
-    dut.in_b_valid.value = 0
-    dut.in_first.value = 0
     dut.capture.value = 0
     dut.shift_en.value = 0
     dut.in_shadow.value = 0
@@ -62,11 +59,8 @@ async def step(dut, in_a: int, in_b: int, in_a_valid: int, in_b_valid: int, in_f
 
     Inputs are written as unsigned bit patterns so negative operands are fed in correctly regardless of the port's signedness.
     """
-    dut.in_a.value = to_unsigned(in_a, data_width)
-    dut.in_b.value = to_unsigned(in_b, data_width)
-    dut.in_a_valid.value = in_a_valid
-    dut.in_b_valid.value = in_b_valid
-    dut.in_first.value = in_first
+    dut.in_a.value = pack_a(in_a, in_a_valid, in_first, data_width)
+    dut.in_b.value = pack_b(in_b, in_b_valid, data_width)
     dut.capture.value = capture
     dut.shift_en.value = shift_en
     dut.in_shadow.value = to_unsigned(in_shadow, acc_width)
@@ -75,12 +69,9 @@ async def step(dut, in_a: int, in_b: int, in_a_valid: int, in_b_valid: int, in_f
 
 def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
     """Compare every DUT output against the model."""
-    dut_out_a = int(dut.out_a.value)
-    dut_out_b = int(dut.out_b.value)
+    dut_out_a, dut_a_valid, dut_first = unpack_a(dut.out_a.value, data_width)
+    dut_out_b, dut_b_valid = unpack_b(dut.out_b.value, data_width)
     dut_acc = int(dut.acc.value) & ((1 << acc_width) - 1)
-    dut_a_valid = int(dut.out_a_valid.value)
-    dut_b_valid = int(dut.out_b_valid.value)
-    dut_first = int(dut.out_first.value)
     dut_out_shadow = int(dut.out_shadow.value) & ((1 << acc_width) - 1)
 
     prefix = f"[{ctx}] " if ctx else ""
@@ -105,7 +96,6 @@ def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
 # --------------------------------------------------------------------------- #
 # tests
 # --------------------------------------------------------------------------- #
-
 @cocotb.test()
 async def test_reset(dut):
     """After reset, every output is 0"""
@@ -117,9 +107,6 @@ async def test_reset(dut):
     assert int(dut.out_a.value) == 0
     assert int(dut.out_b.value) == 0
     assert int(dut.acc.value) == 0
-    assert int(dut.out_a_valid.value) == 0
-    assert int(dut.out_b_valid.value) == 0
-    assert int(dut.out_first.value) == 0
     assert int(dut.out_shadow.value) == 0
 
 @cocotb.test()
@@ -179,7 +166,6 @@ async def test_operand_propagation(dut):
         model.step(a, b, in_a_valid = 1, in_b_valid=1)
         check(dut, model, data_width, acc_width, ctx=f"prop[{i}]")
 
-# TODO: test if only 1 valid makes a bubble
 @cocotb.test()
 async def test_bubble_holds_acc(dut):
     """

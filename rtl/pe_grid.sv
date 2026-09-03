@@ -1,10 +1,4 @@
-// import pe_pkg::*;
-
-module pe_grid //#(
-    //parameter DATA_WIDTH = 8,   // width of data inputs
-    //parameter ACC_WIDTH = 32,   // width of accumulators within PEs
-    //parameter N = 3             // generating an N x N array
-//)
+module pe_grid 
 import pe_pkg::*;
 (
     input logic clk,

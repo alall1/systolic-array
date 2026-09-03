@@ -5,7 +5,11 @@ functions that live here:
   1. to_signed - interpret the low 'width' bits of 'value' as two's complement; used to convert n-bit representations into 32-bit Python int
   2. to_unsigned - interpret the low 'width' bits of 'value' as unsigned int; used to convert 32-bit Python int to n-bit representation
   3. golden_matmul - the independent reference for matmuls. Just numpy.
-  4. build_skew_schedule - converts matrices A, B into the per-edge, per-cycle input streams the grid needs, plus the cycle count to drain. 
+  4. pack_a - packing inputs into the a_payload_t type (data, valid, and first)
+  5. unpack_a - slicing the a_payload_t type into data, valid, and first
+  6. pack_b - packing inputs into the b_payload_t type (data, valid)
+  7. unpack_b - slicing the b_payload_t type into data and valid
+  8. build_skew_schedule - converts matrices A, B into the per-edge, per-cycle input streams the grid needs, plus the cycle count to drain. 
     - This is the timing spec the cocotb driver follows.
 """
 
@@ -24,6 +28,31 @@ def to_unsigned(value: int, width: int) -> int:
 def golden_matmul(A, B):
     """The golden model for matmuls"""
     return np.asarray(A) @ np.asarray(B)
+
+def pack_a(data, valid, first, data_width):
+    """Packing inputs into the a_payload_t type (data, valid, first)"""
+    data_u = to_unsigned(data, data_width)
+    return (data_u << 2) | ((valid & 1) << 1) | (first & 1)
+
+def unpack_a(word, data_width):
+    """Slicing the a_payload_t type into data, valid, and first"""
+    word  = int(word)
+    first = word & 1
+    valid = (word >> 1) & 1
+    data  = to_signed((word >> 2) & ((1 << data_width) - 1), data_width)
+    return data, valid, first
+
+def pack_b(data, valid, data_width):
+    """Packing inputs into the b_payload_t type (data, valid)"""
+    data_u = to_unsigned(data, data_width)
+    return (data_u << 1) | (valid & 1)
+
+def unpack_b(word, data_width):
+    """Slicing the b_payload_t type into data and first"""
+    word  = int(word)
+    valid = word & 1
+    data  = to_signed((word >> 1) & ((1 << data_width) - 1), data_width)
+    return data, valid
 
 def build_skew_schedule(A, B, P=None):
     """Rectangular skew schedule with per-direction valids. Subsumes the old

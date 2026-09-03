@@ -26,7 +26,7 @@ EXTRA_ARGS   += --trace --trace-structs
 # exporting parameters to testbench
 export DATA_WIDTH
 export ACC_WIDTH
- 
+
 ifeq ($(WAVES),1)
     export COCOTB_TRACE = 1
 endif

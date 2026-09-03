@@ -55,10 +55,8 @@ def unpack_b(word, data_width):
     return data, valid
 
 def build_skew_schedule(A, B, P=None):
-    """Rectangular skew schedule with per-direction valids. Subsumes the old
-    square builder: pass square A, B (P defaults to N) for identical data
-    streams, plus valids.
-
+    """
+    Rectangular skew schedule with per-direction valids plus "first" signal propagating with A payload
     Returns a_dat, a_val, b_dat, b_val, n_cycles -- each indexed [edge][cycle].
     Rows i>=M and cols j>=N are all zero with valid low.
     """
@@ -74,18 +72,24 @@ def build_skew_schedule(A, B, P=None):
 
     n_cycles = (P - 1) + (K - 1) + (P - 1) + 1 + 2  # far-corner drain + slack
 
-    a_dat = [[0] * n_cycles for _ in range(P)]
-    a_val = [[0] * n_cycles for _ in range(P)]
-    b_dat = [[0] * n_cycles for _ in range(P)]
-    b_val = [[0] * n_cycles for _ in range(P)]
+    a_data = [[0] * n_cycles for _ in range(P)]
+    a_valid = [[0] * n_cycles for _ in range(P)]
+    a_first = [[0] * n_cycles for _ in range(P)]
+
+    b_data = [[0] * n_cycles for _ in range(P)]
+    b_valid = [[0] * n_cycles for _ in range(P)]
 
     for i in range(M):
         for k in range(K):
-            a_dat[i][i + k] = int(A[i][k])
-            a_val[i][i + k] = 1
+            c = i + k
+            a_data[i][c] = int(A[i][k])
+            a_valid[i][c] = 1
+            if k == 0:
+                a_first[i][c] = 1
     for j in range(N):
         for k in range(K):
-            b_dat[j][j + k] = int(B[k][j])
-            b_val[j][j + k] = 1
+            c = j + k
+            b_data[j][c] = int(B[k][j])
+            b_valid[j][c] = 1
 
-    return a_dat, a_val, b_dat, b_val, n_cycles
+    return a_data, a_valid, a_first, b_data, b_valid, n_cycles

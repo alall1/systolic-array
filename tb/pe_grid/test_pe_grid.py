@@ -18,7 +18,7 @@ from cocotb.triggers import RisingEdge, Timer, First, Edge
 
 import numpy as np
 
-from utils import to_signed, to_unsigned, golden_matmul, build_skew_schedule
+from utils import to_signed, to_unsigned, pack_a, pack_b, golden_matmul, build_skew_schedule
 
 CLK_PERIOD_NS = 10
 
@@ -44,14 +44,12 @@ def get_params(dut):
 async def start_clock(dut):
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
 
-async def reset_dut(dut, P, data_width, cycles=2):
+async def reset_dut(dut, P, cycles=2):
+    """Assert active-low reset for `cycles`, then release on an edge."""
     dut.rst_n.value = 0
-    dut.inp_first.value = 0
     for i in range(P):
         dut.a_in[i].value = 0
         dut.b_in[i].value = 0
-        dut.a_valid[i].value = 0
-        dut.b_valid[i].value = 0
     for _ in range(cycles):
         await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
@@ -82,24 +80,19 @@ def read_out_grid(dut, acc_width, P, M=None, N=None):
 
 async def drive_schedule(dut, A, B, P, data_width, first=False):
     """Drive one A@B (MxK * KxN) through a PxP grid using the unified skew schedule with per-direction valids. Returns n_cycles driven."""
-    a_dat, a_val, b_dat, b_val, n_cycles = build_skew_schedule(A, B, P)
+    a_data, a_valid, a_first, b_data, b_valid, n_cycles = build_skew_schedule(A, B, P)
 
     for t in range(n_cycles):
-        if first:
-            dut.inp_first.value = 1 if t == 0 else 0
         for i in range(P):
-            dut.a_in[i].value = to_unsigned(a_dat[i][t], data_width)
-            dut.b_in[i].value = to_unsigned(b_dat[i][t], data_width)
-            dut.a_valid[i].value = a_val[i][t]
-            dut.b_valid[i].value = b_val[i][t]
+            dut.a_in[i].value = pack_a(a_data[i][t], a_valid[i][t], a_first[i][t], data_width)
+            dut.b_in[i].value = pack_b(b_data[i][t], b_valid[i][t], data_width)
         await RisingEdge(dut.clk)
         await Timer(1, unit="ns")
 
     for i in range(P):
         dut.a_in[i].value = 0
         dut.b_in[i].value = 0
-        dut.a_valid[i].value = 0
-        dut.b_valid[i].value = 0
+
     return n_cycles
 
 async def run_matmul(dut, A, B, data_width, acc_width, P, first=False):

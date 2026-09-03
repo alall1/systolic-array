@@ -21,35 +21,36 @@ Next steps: implement double-buffer broadcast capture + drainage
 
 ### Notes
 - this design is *output-stationary*, meaning two matrices (e.g. weights and activations) stream in at the same time and the output matrix is "stationary", staying in each PE. 
-- cycles to complete a matmul: K + (M-1) + (N-1)
+- cycles to complete a matmul: K + (M-1) + (N-1) = M + K + N - 2
 	- K = accumulation depth / contraction dimension; A (M,K) * B (K, N) = C (M, N); the number of multiply-accumulates each PE does in a single matmul
 	- however, for nxn * nxn matmul, first PE (top-left-most PE) finishes after n cycles; sits idle until last PE (bottom-right-most PE) finishes 2n - 2 cycles later unless the feeder starts streaming the values for the next matmul after N cycles.
- - for consecutive matmuls propagate signal 'first' through the array, which "clears" each accumulator by appending just the product in the multiply-accumulate flow; doesn't waste a cycle like propagating an 'acc_clear' signal would, because instead of zeroing the accumulators 'first' instead appends the first multiply-accumulate product of the next matmul for each PE.
+- for consecutive matmuls propagate signal 'first' through the array, which "clears" each accumulator by appending just the product in the multiply-accumulate flow; doesn't waste a cycle like propagating an 'acc_clear' signal would, because instead of zeroing the accumulators 'first' instead appends the first multiply-accumulate product of the next matmul for each PE.
+	- implementation below fixed by having payloads instead of separate data/first/valid propagation; "first" now rides with the first element of matrix A, clearing the array
 	- having the following code wouldn't work, because the in_first_bus can't have multiple drivers (is a `logic` bus):
- 	```
+	```
 	always_comb begin
-	    for (int i = 0; i < N; i++) begin
-	        for (int j = 0; j < N; j++) begin
-	            in_first_bus[i][j+1] = out_first_bus[i][j];
-	            in_first_bus[i+1][j] = out_first_bus[i][j];
-	        end
-	    end
+		for (int i = 0; i < N; i++) begin
+			for (int j = 0; j < N; j++) begin
+				in_first_bus[i][j+1] = out_first_bus[i][j];
+				in_first_bus[i+1][j] = out_first_bus[i][j];
+			end
+		end
 	end
-  	```
+	```
 	- instead, have only the top row of the grid propagate right, and the rest propagate down, as follows:
-   	```
+	```
 	always_comb begin
-	    for (int i = 0; i < N; i++) begin
-	        for (int j = 0; j < N; j++) begin
-	            if (i == 0) in_first_bus[i][j+1] = out_first_bus[i][j];     // only top row "first" signas propagate left; the rest propagate downward
-	            in_first_bus[i+1][j] = out_first_bus[i][j];
-	        end
-	    end
+		for (int i = 0; i < N; i++) begin
+			for (int j = 0; j < N; j++) begin
+				if (i == 0) in_first_bus[i][j+1] = out_first_bus[i][j];     // only top row "first" signas propagate left; the rest propagate downward
+				in_first_bus[i+1][j] = out_first_bus[i][j];
+			end
+		end
 	end
-    ```
+	```
 	- visualization of 'first' signal propagation (for a single matmul):
- 
- 	  <img width="619" height="472" alt="first_propagation" src="https://github.com/user-attachments/assets/9b519eac-2b44-44d8-88f8-042022de8af4" />
+
+		<img width="619" height="472" alt="first_propagation" src="https://github.com/user-attachments/assets/9b519eac-2b44-44d8-88f8-042022de8af4" />
 
 - for rectangular matmuls (MxK * KxN), a regular systolic array setup with all PEs completing a MAC every cycle would work (note that M <= n and N <= n for an nxn array); nothing would be added to the accumulators of the unused PEs, since 0 * anything = 0. However, this introduces two problems:
 	1. energy; a zero-multiply still uses the multiplier and accumulator every cycle, even if it is adding nothing to the accumulated sum. On real silicon, MAC is the dominant dynamic-power consumer. Feeding zeros through unused PEs for a small matmul burns power for guaranteed-zero results

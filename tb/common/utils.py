@@ -70,7 +70,7 @@ def build_skew_schedule(A, B, P=None):
         P = max(M, N)
     assert M <= P and N <= P, f"array {P}x{P} too small for {M}x{K} * {K}x{N}"
 
-    n_cycles = (P - 1) + (K - 1) + (P - 1) + 1 + 2  # far-corner drain + slack
+    n_cycles = (P - 1) + (K - 1) + (P - 1) + 1  # 3N - 2 cycles -> acc[n-1][n-1] just finished
 
     a_data = [[0] * n_cycles for _ in range(P)]
     a_valid = [[0] * n_cycles for _ in range(P)]

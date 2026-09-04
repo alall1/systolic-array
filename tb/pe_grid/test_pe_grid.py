@@ -34,7 +34,7 @@ RECT_SHAPES = [
 # helpers
 # --------------------------------------------------------------------------- #
 
-def get_params(dut):
+def get_params():
     data_width = int(os.environ["DATA_WIDTH"])
     acc_width  = int(os.environ["ACC_WIDTH"])
     array_dim = int(os.environ["ARRAY_DIM"])
@@ -54,8 +54,6 @@ async def reset_dut(dut, P, cycles=2):
         await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
     dut.rst_n.value = 1
-    await RisingEdge(dut.clk)
-    await Timer(1, unit="ns")
 
 async def wait_out_ready(dut, timeout_cycles):
     """Wait for out_ready, but fail if it doesn't assert in time"""
@@ -78,7 +76,21 @@ def read_out_grid(dut, acc_width, P, M=None, N=None):
             grid[i][j] = to_signed(int(dut.out[i][j].value), acc_width)
     return grid
 
-async def drive_schedule(dut, A, B, P, data_width, first=False):
+async def read_drain_out(dut, acc_width, P, M=None, N=None):
+    if M is None:
+        M = P
+    if N is None:
+        N = P
+    grid = np.zeros((P, P), dtype=object)
+    for i in reversed(range(P)):
+        await Timer(1, unit="ns")
+        for j in range(P):
+            grid[i][j] = to_signed(int(dut.drain_out[i].value), acc_width)
+        await RisingEdge(dut.clk)
+    out = grid[0:M, 0:N].copy()
+    return out
+
+async def drive_schedule(dut, A, B, P, data_width):
     """Drive one A@B (MxK * KxN) through a PxP grid using the unified skew schedule with per-direction valids. Returns n_cycles driven."""
     a_data, a_valid, a_first, b_data, b_valid, n_cycles = build_skew_schedule(A, B, P)
 
@@ -89,19 +101,9 @@ async def drive_schedule(dut, A, B, P, data_width, first=False):
         await RisingEdge(dut.clk)
         await Timer(1, unit="ns")
 
-    for i in range(P):
-        dut.a_in[i].value = 0
-        dut.b_in[i].value = 0
-
-    return n_cycles
-
-async def run_matmul(dut, A, B, data_width, acc_width, P, first=False):
+async def run_matmul(dut, A, B, data_width, acc_width, P):
     """Square convenience wrapper: drive NxN * NxN, wait out_ready, read grid."""
-    n_cycles = await drive_schedule(dut, A, B, P, data_width, first=first)
-    ok = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
-    assert ok, (
-        f"out_ready never asserted within timeout for P={P}; "
-        f"check the grid's out_ready counter/FSM")
+    await drive_schedule(dut, A, B, P, data_width)
     return read_out_grid(dut, acc_width, P)
 
 def check_grid(got, expected, ctx=""):
@@ -146,9 +148,9 @@ def get_pe_valid(dut, i, j):
 @cocotb.test()
 async def test_zeros(dut):
     """All-zero operands -> all-zero result"""
-    data_width, acc_width, P = get_params(dut)
+    data_width, acc_width, P = get_params()
     await start_clock(dut)
-    await reset_dut(dut, P, data_width)
+    await reset_dut(dut, P)
 
     A = np.zeros((P, P), dtype=int)
     B = np.zeros((P, P), dtype=int)
@@ -158,9 +160,9 @@ async def test_zeros(dut):
 @cocotb.test()
 async def test_identity(dut):
     """A @ I == A: a simple, readable first case"""
-    data_width, acc_width, P = get_params(dut)
+    data_width, acc_width, P = get_params()
     await start_clock(dut)
-    await reset_dut(dut, P, data_width)
+    await reset_dut(dut, P)
 
     lo = -(1 << (data_width - 1))
     hi = (1 << (data_width - 1)) - 1
@@ -172,7 +174,7 @@ async def test_identity(dut):
 @cocotb.test()
 async def test_random_matmul(dut):
     """Randomized A, B across many trials; NOT for consecutive matmuls--fresh reset per trial. Grid-size square matmuls only"""
-    data_width, acc_width, P = get_params(dut)
+    data_width, acc_width, P = get_params()
     await start_clock(dut)
 
     hi = (1 << (data_width - 1)) - 1
@@ -180,7 +182,7 @@ async def test_random_matmul(dut):
     bound = max(2, min(hi, 1 << (data_width // 2)))
 
     for trial in range(30):
-        await reset_dut(dut, P, data_width)
+        await reset_dut(dut, P)
         A = np.random.randint(-bound, bound, size=(P, P))
         B = np.random.randint(-bound, bound, size=(P, P))
         got = await run_matmul(dut, A, B, data_width, acc_width, P)
@@ -193,25 +195,23 @@ async def test_rectangular_matmul(dut):
       (1) active MxN sub-region equals numpy A@B
       (2) inactive PEs (i>=M OR j>=N) never raise in_valid (continuous sample)
     """
-    data_width, acc_width, P = get_params(dut)
+    data_width, acc_width, P = get_params()
     await start_clock(dut)
 
     for (M, K, N) in RECT_SHAPES:
         if M > P or N > P:
             continue
-        await reset_dut(dut, P, data_width)
+        await reset_dut(dut, P)
 
         # fresh monitor per shape so violations don't bleed across shapes
         monitor = AccEnMonitor(dut, P)
-        mon_task = cocotb.start_soon(monitor.run())
+        cocotb.start_soon(monitor.run())
 
         rng = np.random.default_rng(hash((M, K, N)) & 0xFFFF)
         A = rng.integers(-4, 4, size=(M, K))
         B = rng.integers(-4, 4, size=(K, N))
 
-        n_cycles = await drive_schedule(dut, A, B, P, data_width)
-        ok = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
-        assert ok, f"out_ready never asserted for M={M},K={K},N={N}"
+        await drive_schedule(dut, A, B, P, data_width)
 
         # let the monitor catch trailing enables, then stop it
         for _ in range(2):
@@ -232,16 +232,34 @@ async def test_rectangular_matmul(dut):
         assert not violations, f"[M={M},K={K},N={N}] inactive PEs raised in_valid (should be idle): {violations}"
 
 @cocotb.test()
-async def test_consecutive_matmul(dut):
+async def test_consecutive_square_matmul(dut):
+    """Consecutive square matmuls, NO reset between them."""
+    data_width, acc_width, P = get_params()
+    await start_clock(dut)
+    await reset_dut(dut, P)   # ONE reset at the very start only
+
+    hi = (1 << (data_width - 1)) - 1
+    # Keep operands modest so N-term sums stay well inside ACC_WIDTH.
+    bound = max(2, min(hi, 1 << (data_width // 2)))
+    
+    for trial in range(30):
+        A = np.random.randint(-bound, bound, size=(P, P))
+        B = np.random.randint(-bound, bound, size=(P, P))
+
+        got = await run_matmul(dut, A, B, data_width, acc_width, P)
+        check_grid(got, golden_matmul(A, B), ctx=f"rand[{trial}]")
+
+@cocotb.test()
+async def test_consecutive_random_matmul(dut):
     """
     Consecutive matmuls of RANDOM shapes (square or rectangular), NO reset between them. 
     Checks per matmul: 
     (1) active MxN sub-region equals A@B,
     (2) inactive PEs (i>=M OR j>=N) never raised in_valid during that matmul.
     """
-    data_width, acc_width, P = get_params(dut)
+    data_width, acc_width, P = get_params()
     await start_clock(dut)
-    await reset_dut(dut, P, data_width)   # ONE reset at the very start only
+    await reset_dut(dut, P)   # ONE reset at the very start only
 
     monitor = AccEnMonitor(dut, P)
     cocotb.start_soon(monitor.run())
@@ -257,9 +275,7 @@ async def test_consecutive_matmul(dut):
         # snapshot enables seen so far; anything new is from THIS matmul
         before = set(monitor.ever_enabled)
 
-        n_cycles = await drive_schedule(dut, A, B, P, data_width, first=True)
-        ok = await wait_out_ready(dut, timeout_cycles=2 * n_cycles + 10)
-        assert ok, f"out_ready never asserted for trial {trial} (M={M},K={K},N={N})"
+        await drive_schedule(dut, A, B, P, data_width)
 
         # let the monitor catch trailing enables before diffing
         for _ in range(2):

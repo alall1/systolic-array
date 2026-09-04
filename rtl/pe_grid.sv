@@ -11,7 +11,9 @@ import pe_pkg::*;
     input logic shift_en,
 
     output logic signed [ACC_WIDTH-1:0] out [0:ARRAY_DIM-1][0:ARRAY_DIM-1], // the output of the grid, the resulting matrix; ready when out_ready = 1
-    output logic out_ready                                                  // when outputs are ready to read; for now, after 3(ARRAY_DIM) - 2 cycles, when all PEs are done, but for future, after 2(ARRAY_DIM-1) cycles first PE output finishes and can be read in a ripple fashion
+    output logic out_ready,                                                 // when outputs are ready to read; for now, after 3(ARRAY_DIM) - 2 cycles, when all PEs are done, but for future, after 2(ARRAY_DIM-1) cycles first PE output finishes and can be read in a ripple fashion
+
+    output logic [ACC_WIDTH-1:0] drain_out [0:ARRAY_DIM-1]
 );
 
 localparam int FINISH = 3*ARRAY_DIM - 2;                // baked-in number of clock cycles until the NxN matmul is finished. 3(ARRAY_DIM) - 2
@@ -60,17 +62,13 @@ end
 always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         count <= '0;
-        out_ready <= 1'b0;
-    end else if (count == CNT_WIDTH'(FINISH - 1)) begin   // when 3N - 2 clock cycles have passed and the matmul is finished (out is ready to read)
-        count <= count;
-        out_ready <= 1'b1;
     end else if (a_bus[0][0].first) begin
         count <= '0;
-        out_ready <= 1'b0;
     end else begin
         count <= count + 1;
-        out_ready <= 1'b0;
     end
 end
+
+assign out_ready = (count == CNT_WIDTH'(FINISH - 1));
 
 endmodule

@@ -21,13 +21,13 @@ DATA_WIDTH ?= 8
 ACC_WIDTH  ?= 32
 
 COMPILE_ARGS += -DDATA_WIDTH=$(DATA_WIDTH) -DACC_WIDTH=$(ACC_WIDTH)
-EXTRA_ARGS   += --trace --trace-structs
 
 # exporting parameters to testbench
 export DATA_WIDTH
 export ACC_WIDTH
 
-ifeq ($(WAVES),1)
+ifeq ($(WAVES), 1)
+	EXTRA_ARGS   += --trace --trace-structs
     export COCOTB_TRACE = 1
 endif
  

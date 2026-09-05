@@ -22,14 +22,14 @@ ACC_WIDTH  	?= 32
 ARRAY_DIM  	?= 5
 
 COMPILE_ARGS += -DDATA_WIDTH=$(DATA_WIDTH) -DACC_WIDTH=$(ACC_WIDTH) -DARRAY_DIM=$(ARRAY_DIM)
-EXTRA_ARGS   += --trace --trace-structs
 
 # exporting parameters to testbench
 export DATA_WIDTH
 export ACC_WIDTH
 export ARRAY_DIM
 
-ifeq ($(WAVES),1)
+ifeq ($(WAVES), 1)
+	EXTRA_ARGS   += --trace --trace-structs
     export COCOTB_TRACE = 1
 endif
 

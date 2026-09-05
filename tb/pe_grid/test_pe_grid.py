@@ -30,6 +30,27 @@ RECT_SHAPES = [
     (1, 1, 1),   # degenerate
 ]
 
+class AccEnMonitor:
+    """Samples every PE's in_valid once per cycle for the whole run, recording any inactive PE ever enabled. Forked coroutine so no cycle is missed."""
+
+    def __init__(self, dut, P):
+        self.dut = dut
+        self.P = P
+        self.ever_enabled = set()
+        self._stop = False
+
+    async def run(self):
+        while not self._stop:
+            await RisingEdge(self.dut.clk)
+            await Timer(1, unit="ns")
+            for i in range(self.P):
+                for j in range(self.P):
+                    if int(get_pe_valid(self.dut, i, j).value) == 1:
+                        self.ever_enabled.add((i, j))
+
+    def stop(self):
+        self._stop = True
+
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
@@ -55,14 +76,13 @@ async def reset_dut(dut, P, cycles=2):
     await Timer(1, unit="ns")
     dut.rst_n.value = 1
 
-async def wait_out_ready(dut, timeout_cycles):
-    """Wait for out_ready, but fail if it doesn't assert in time"""
-    for _ in range(timeout_cycles):
-        await RisingEdge(dut.clk)
-        await Timer(1, unit="ns")
-        if int(dut.out_ready.value) == 1:
-            return True
-    return False
+def inactive_pes(M, N, P):
+    """PEs that must stay idle: dead rows (i>=M) UNION dead cols (j>=N)."""
+    return {(i, j) for i in range(P) for j in range(P) if (i >= M or j >= N)}
+
+def get_pe_valid(dut, i, j):
+    """Handle to PE(i,j)'s in_valid to check if it is computing a MAC"""
+    return dut.row_loop[i].col_loop[j].pe.in_valid
 
 def read_out_grid(dut, acc_width, P, M=None, N=None):
     """Read the acc grid as signed ints. Defaults to the full PxP array; pass M, N to read only the top-left MxN sub-region."""
@@ -75,6 +95,23 @@ def read_out_grid(dut, acc_width, P, M=None, N=None):
         for j in range(N):
             grid[i][j] = to_signed(int(dut.out[i][j].value), acc_width)
     return grid
+
+async def drive_schedule(dut, A, B, P, data_width):
+    """Drive one A@B (MxK * KxN) through a PxP grid using the unified skew schedule with per-direction valids. Returns n_cycles driven."""
+    a_data, a_valid, a_first, b_data, b_valid, n_cycles = build_skew_schedule(A, B, P)
+
+    for t in range(n_cycles):
+        for i in range(P):
+            dut.a_in[i].value = pack_a(a_data[i][t], a_valid[i][t], a_first[i][t], data_width)
+            dut.b_in[i].value = pack_b(b_data[i][t], b_valid[i][t], data_width)
+        await RisingEdge(dut.clk)
+        await Timer(1, unit="ns")
+
+def check_grid(got, expected, ctx=""):
+    prefix = f"[{ctx}] " if ctx else ""
+    if not np.array_equal(got, expected):
+        raise AssertionError(
+            f"{prefix}matmul mismatch\ngot=\n{got}\nexpected=\n{expected}")
 
 async def drain_out(dut, acc_width, P, M=None, N=None):
     if M is None:
@@ -103,58 +140,12 @@ async def drain_out(dut, acc_width, P, M=None, N=None):
 
     return grid[0:M, 0:N].copy()
 
-async def drive_schedule(dut, A, B, P, data_width):
-    """Drive one A@B (MxK * KxN) through a PxP grid using the unified skew schedule with per-direction valids. Returns n_cycles driven."""
-    a_data, a_valid, a_first, b_data, b_valid, n_cycles = build_skew_schedule(A, B, P)
-
-    for t in range(n_cycles):
-        for i in range(P):
-            dut.a_in[i].value = pack_a(a_data[i][t], a_valid[i][t], a_first[i][t], data_width)
-            dut.b_in[i].value = pack_b(b_data[i][t], b_valid[i][t], data_width)
-        await RisingEdge(dut.clk)
-        await Timer(1, unit="ns")
-
 async def run_matmul(dut, A, B, data_width, acc_width, P):
     """Square convenience wrapper: drive NxN * NxN, wait out_ready, read grid."""
     M = A.shape[0]
     N = B.shape[1]
     await drive_schedule(dut, A, B, P, data_width)
     return read_out_grid(dut, acc_width, P, M, N)
-
-def check_grid(got, expected, ctx=""):
-    prefix = f"[{ctx}] " if ctx else ""
-    if not np.array_equal(got, expected):
-        raise AssertionError(
-            f"{prefix}matmul mismatch\ngot=\n{got}\nexpected=\n{expected}")
-
-def inactive_pes(M, N, P):
-    """PEs that must stay idle: dead rows (i>=M) UNION dead cols (j>=N)."""
-    return {(i, j) for i in range(P) for j in range(P) if (i >= M or j >= N)}
-
-class AccEnMonitor:
-    """Samples every PE's in_valid once per cycle for the whole run, recording any inactive PE ever enabled. Forked coroutine so no cycle is missed."""
-
-    def __init__(self, dut, P):
-        self.dut = dut
-        self.P = P
-        self.ever_enabled = set()
-        self._stop = False
-
-    async def run(self):
-        while not self._stop:
-            await RisingEdge(self.dut.clk)
-            await Timer(1, unit="ns")
-            for i in range(self.P):
-                for j in range(self.P):
-                    if int(get_pe_valid(self.dut, i, j).value) == 1:
-                        self.ever_enabled.add((i, j))
-
-    def stop(self):
-        self._stop = True
-
-def get_pe_valid(dut, i, j):
-    """Handle to PE(i,j)'s in_valid to check if it is computing a MAC"""
-    return dut.row_loop[i].col_loop[j].pe.in_valid
 
 # --------------------------------------------------------------------------- #
 # tests
@@ -169,8 +160,8 @@ async def test_zeros(dut):
 
     A = np.zeros((P, P), dtype=int)
     B = np.zeros((P, P), dtype=int)
-    got = await run_matmul(dut, A, B, data_width, acc_width, P)
-    check_grid(got, golden_matmul(A, B), ctx="zeros")
+    g_out = await run_matmul(dut, A, B, data_width, acc_width, P)
+    check_grid(g_out, golden_matmul(A, B), ctx="zeros")
 
 @cocotb.test()
 async def test_square(dut):
@@ -208,7 +199,7 @@ async def test_rectangular(dut):
     data_width, acc_width, P = get_params()
     await start_clock(dut)
 
-    for (M, K, N) in RECT_SHAPES:
+    for trial, (M, K, N) in enumerate(RECT_SHAPES):
         if M > P or N > P:
             continue
         await reset_dut(dut, P)
@@ -221,23 +212,17 @@ async def test_rectangular(dut):
         A = rng.integers(-4, 4, size=(M, K))
         B = rng.integers(-4, 4, size=(K, N))
 
-        await drive_schedule(dut, A, B, P, data_width)
+        g_out = await run_matmul(dut, A, B, data_width, acc_width, P)
+        d_out = await drain_out(dut, acc_width, P, M, N)
 
-        # let the monitor catch trailing enables, then stop it
-        for _ in range(2):
-            await RisingEdge(dut.clk)
-            await Timer(1, unit="ns")
         monitor.stop()
 
-        # (1) correctness on the active sub-region
-        got = read_out_grid(dut, acc_width, P, M, N)
+        # 1. matmul correctness on the active sub-region
         exp = golden_matmul(A, B)
-        if not np.array_equal(got, exp):
-            raise AssertionError(
-                f"[M={M},K={K},N={N}] active MxN mismatch\n"
-                f"got=\n{got}\nexpected=\n{exp}")
+        check_grid(g_out, exp, ctx=f"rectangular_g_out[{trial}]")
+        check_grid(d_out, exp, ctx=f"rectangular_d_out[{trial}]")
 
-        # (2) inactive PEs stayed idle
+        # 2. inactive PEs stayed idle
         violations = sorted(inactive_pes(M, N, P) & monitor.ever_enabled)
         assert not violations, f"[M={M},K={K},N={N}] inactive PEs raised in_valid (should be idle): {violations}"
 
@@ -266,8 +251,8 @@ async def test_consecutive_square(dut):
         g_out = await run_matmul(dut, A, B, data_width, acc_width, P)
         d_out = await drain_out(dut, acc_width, P)
         
-        check_grid(g_out, exp, ctx=f"rand_g_out[{trial}]")
-        check_grid(d_out, exp, ctx=f"rand_d_out[{trial}]")
+        check_grid(g_out, exp, ctx=f"consecutive_square_g_out[{trial}]")
+        check_grid(d_out, exp, ctx=f"consecutive_square_d_out[{trial}]")
 
 @cocotb.test()
 async def test_consecutive_random(dut):

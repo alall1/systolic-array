@@ -6,7 +6,6 @@ Run:
     make WAVES=1  (dump waves for GTKWave)
 
 Golden model: numpy A @ B.
-Driver: applies diagonal skew from build_skew_schedule, then waits on "out_ready" signal and reads acc grid.
 """
 
 import random
@@ -141,7 +140,7 @@ async def drain_out(dut, acc_width, P, M=None, N=None):
     return grid[0:M, 0:N].copy()
 
 async def run_matmul(dut, A, B, data_width, acc_width, P):
-    """Square convenience wrapper: drive NxN * NxN, wait out_ready, read grid."""
+    """Drive MxK * KxN, then read grid"""
     M = A.shape[0]
     N = B.shape[1]
     await drive_schedule(dut, A, B, P, data_width)
@@ -178,7 +177,9 @@ async def test_square(dut):
     # Keep operands modest so N-term sums stay well inside ACC_WIDTH.
     bound = max(2, min(hi, 1 << (data_width // 2)))
 
-    for trial in range(50):
+    NUM_TRIALS = 50
+
+    for trial in range(NUM_TRIALS):
         await reset_dut(dut, P)
         A = np.random.randint(-bound, bound, size=(P, P))
         B = np.random.randint(-bound, bound, size=(P, P))
@@ -241,8 +242,10 @@ async def test_consecutive_square(dut):
     hi = (1 << (data_width - 1)) - 1
     # Keep operands modest so N-term sums stay well inside ACC_WIDTH.
     bound = max(2, min(hi, 1 << (data_width // 2)))
+
+    NUM_TRIALS = 50
     
-    for trial in range(30):
+    for trial in range(NUM_TRIALS):
         A = np.random.randint(-bound, bound, size=(P, P))
         B = np.random.randint(-bound, bound, size=(P, P))
 
@@ -266,11 +269,10 @@ async def test_consecutive_random(dut):
     await start_clock(dut)
     await reset_dut(dut, P)   # ONE reset at the very start only
 
-    monitor = AccEnMonitor(dut, P)
-    cocotb.start_soon(monitor.run())
+    NUM_TRIALS = 50
 
     rng = np.random.default_rng(20260829)
-    for trial in range(30):
+    for trial in range(NUM_TRIALS):
         M = int(rng.integers(1, P + 1))
         N = int(rng.integers(1, P + 1))
         K = int(rng.integers(1, 7))
@@ -285,6 +287,47 @@ async def test_consecutive_random(dut):
         check_grid(g_out, exp, ctx=f"rand_g_out[{trial}]")
         check_grid(d_out, exp, ctx=f"rand_d_out[{trial}]")
 
+@cocotb.test()
+async def test_compute_drain_overlap(dut):
+    """
+    Consecutive matmuls of RANDOM shapes (square or rectangular), NO reset between them; COMPUTE and DRAIN phases overlapping
+    Checks:
+        1. acc[i][j] matrix
+        2. reconstructed drain_out matrix
+    """
+    data_width, acc_width, P = get_params()
+    await start_clock(dut)
+    await reset_dut(dut, P)   # ONE reset at the very start only
+
+    NUM_TRIALS = 50
+
+    pending = 0     # variable to track if the first matmul has completed
+
+    rng = np.random.default_rng(20260829)
+    for trial in range(NUM_TRIALS):
+        if pending:
+            drain_task = cocotb.start_soon(drain_out(dut, acc_width, P, M, N))  # start_soon LAUNCHES a coroutine and schedules it to run concurrently; drain for result from last loop happens concurrently with compute for current loop
+
+        M = int(rng.integers(1, P + 1))
+        N = int(rng.integers(1, P + 1))
+        K = int(rng.integers(1, 7))
+        A = rng.integers(-4, 4, size=(M, K))
+        B = rng.integers(-4, 4, size=(K, N))
+
+        g_out = await run_matmul(dut, A, B, data_width, acc_width, P)           # while run_matmul is driving compute, drain_task runs in the background
+
+        if pending:
+            d_out = await drain_task                                            # d_out is the matmul from the PREVIOUS cycle, check it before calculating exp for current cycle
+            check_grid(d_out, exp, ctx=f"rand_d_out[{trial}]")
+
+        exp = golden_matmul(A, B)
+
+        check_grid(g_out, exp, ctx=f"rand_g_out[{trial}]")
+
+        pending = 1
+    
+    d_out = await drain_out(dut, acc_width, P, M, N)
+    check_grid(d_out, exp, ctx=f"rand_d_out[{NUM_TRIALS-1}]")
 
 # --------------------------------------------------------------------------- #
 # optional tests for debugging readability

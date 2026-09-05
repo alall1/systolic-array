@@ -11,8 +11,6 @@ import pe_pkg::*;
     input logic shift_en,
 
     output logic signed [ACC_WIDTH-1:0] out [0:ARRAY_DIM-1][0:ARRAY_DIM-1], // the output of the grid, the resulting matrix; ready when out_ready = 1
-    output logic out_ready,                                                 // when outputs are ready to read; for now, after 3(ARRAY_DIM) - 2 cycles, when all PEs are done, but for future, after 2(ARRAY_DIM-1) cycles first PE output finishes and can be read in a ripple fashion
-
     output logic [ACC_WIDTH-1:0] drain_out [0:ARRAY_DIM-1]
 );
 
@@ -67,19 +65,6 @@ always_comb begin
         shadow_bus[0][i] = '0;
     end
 end
-
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-        count <= '0;
-    end else if (a_bus[0][0].first) begin
-        count <= '0;
-    end else begin
-        count <= count + 1;
-    end
-end
-
-// out_ready is a combinational output (can be read same-cycle)
-assign out_ready = (count == CNT_WIDTH'(FINISH - 1));
 
 // drain_out is a combinational output of the bottom row's shadow registers
 always_comb begin

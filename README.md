@@ -3,7 +3,7 @@
 
 A hardware matrix-multiplication accelerator built on a systolic array of processing elements (PEs). Each PE does a multiply-accumulate; operands stream through the grid diagonally skewed, and results accumulate in place (output-stationary). Larger matrices will be handled by tiling over M, N, and the K reduction dimension. Memory is kept dumb — all intelligence lives in the feeder, address generator, and control FSM.
 
-Next steps: implement overlapping drain + compute in testbench to get to 3n-2 cycles between matmuls
+Next steps: implement skewed propagating capture; overlapping compute + drain
 
 ### Current progress
 - [x] PE module complete and tested
@@ -11,9 +11,9 @@ Next steps: implement overlapping drain + compute in testbench to get to 3n-2 cy
 	- [x] consecutive matmuls
 	- [x] MxK * KxN matmul support (PEs outside active range, MxN, are completely inactive)
 	- [ ] double-buffer draining
-		- [ ] broadcast capture (3n - 2 cycles between matmuls)
-		- [ ] skewed propagating capture (2n cycles between matmuls)
-		- [ ] triple buffer propagating capture (n cycles between matmuls)
+		- [x] broadcast capture
+		- [ ] skewed propagating capture
+		- [ ] triple buffer propagating capture
 - [ ] feeder module complete and tested
 - [ ] control FSM module complete and tested
 - [ ] collector module complete and tested
@@ -62,15 +62,15 @@ Next steps: implement overlapping drain + compute in testbench to get to 3n-2 cy
 		1. routing congestion: PEs in the middle of the array are physically surrounded by other PEs; to read one of them directly, its accumulator bus needs to route over or through the region occupied by the other PEs to reach the edges. For all n<sup>2</sup> PEs, you have n<sup>2</sup> buses that are acc bits wide crossing the array. Wire area grows as n<sup>2</sup> times acc-width, and competes for the area the PEs need for their own connections, causing interior routing congestion.
 		2. I/O port count: if the module exposes n<sup>2</sup> accumulator ports as output, that is n<sup>2</sup> * acc-width output pins; for larger arrays, it creates many output pins (n = 16, 32-bit acc -> 8192 output pins)
 		3. timing: a bus routed from the middle of the array to the edge is long, so it may be hard to close timing on. Neighbor-to-neighbor drain wires are short and pipelined, so they run at full clock. Wires directly from the interior would force a slower clock or add pipeline stages on the long buses, which would just be a worse version of the shift-chain.
-	- the drain solution: have a shift-chain that drains PEs from neighbor-to-neighbor, rightwards or downwards (chose downwards for this design). The accumulated sum drains downward each cycle, completely draining after n cycles in an nxn array. However, draining creates an extra phase, meaning worst case matmuls would finish every 3n - 2 (compute phase) + n (drain phase) cycles.
+	- the drain solution: have a shift-chain that drains PEs from neighbor-to-neighbor, rightwards or downwards (chose downwards for this design). The accumulated sum drains downward each cycle, completely draining after n cycles in an nxn array. However, draining creates an extra phase, meaning worst case matmuls would finish every K + 2n - 2 (compute phase) + n (drain phase) cycles.
 		- instead of having completely separate compute and drain phases, they can be overlapped; while the current matmul is computing, the previous matmul is simultaneously draining. This can be done with double-buffering; adding a separate "shadow acc" to each PE that copies the value of acc when "capture" is asserted. There are 3 setups, scaling in complexity but scaling throughput (NOT LATENCY, each matmul still takes 4n - 2 cycles to compute + drain in all 3 setups)
-			1. broadcast-capture: after 3n - 2 cycles, when the last PE finishes computing, broadcast a single "capture" signal to all PEs; all accumulated sums are captured to the shadow buffers and the array is free to start computing again. However,capture can only be asserted once the last PE finishes its MACs, and the other PEs sit idle. Matmuls are completed (and drained) every 3n - 2 cycles; throughput = 1 / (3n - 2).
+			1. broadcast-capture: after K + 2n - 2 cycles, when the last PE finishes computing, broadcast a single "capture" signal to all PEs; all accumulated sums are captured to the shadow buffers and the array is free to start computing again. However,capture can only be asserted once the last PE finishes its MACs, and the other PEs sit idle. Matmuls are completed (and drained) every K + 2n - 2 cycles.
   				- visualization of broadcast-capture double-buffer setup:  
 
 					<img width="616.5" height="398.25" alt="broadcast-capture" src="https://github.com/user-attachments/assets/3b7d31c1-04bb-4bba-99f6-e767c00f46ce" />
 
-			2. skewed, propagating capture: (2n cycles between matmuls)
-			3. triple-buffer propagating capture: (n cycles between matmuls)
+			2. skewed, propagating capture: (2n? cycles between matmuls)
+			3. triple-buffer propagating capture: (n? cycles between matmuls)
 
 ### Future work
 

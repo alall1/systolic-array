@@ -46,7 +46,6 @@ async def reset_dut(dut, cycles: int = 2):
     dut.rst_n.value = 0
     dut.in_a.value = 0
     dut.in_b.value = 0
-    dut.capture.value = 0
     dut.shift_en.value = 0
     dut.in_shadow.value = 0
     for _ in range(cycles):
@@ -59,9 +58,8 @@ async def step(dut, in_a: int, in_b: int, in_a_valid: int, in_b_valid: int, in_f
 
     Inputs are written as unsigned bit patterns so negative operands are fed in correctly regardless of the port's signedness.
     """
-    dut.in_a.value = pack_a(in_a, in_a_valid, in_first, data_width)
+    dut.in_a.value = pack_a(in_a, in_a_valid, in_first, capture, data_width)
     dut.in_b.value = pack_b(in_b, in_b_valid, data_width)
-    dut.capture.value = capture
     dut.shift_en.value = shift_en
     dut.in_shadow.value = to_unsigned(in_shadow, acc_width)
     await RisingEdge(dut.clk)
@@ -69,7 +67,7 @@ async def step(dut, in_a: int, in_b: int, in_a_valid: int, in_b_valid: int, in_f
 
 def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
     """Compare every DUT output against the model."""
-    dut_out_a, dut_a_valid, dut_first = unpack_a(dut.out_a.value, data_width)
+    dut_out_a, dut_a_valid, dut_first, dut_capture = unpack_a(dut.out_a.value, data_width)
     dut_out_b, dut_b_valid = unpack_b(dut.out_b.value, data_width)
     dut_acc = int(dut.acc.value) & ((1 << acc_width) - 1)
     dut_out_shadow = int(dut.out_shadow.value) & ((1 << acc_width) - 1)
@@ -82,15 +80,17 @@ def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
     assert dut_a_valid == model.out_a_valid, (
         f"{prefix}out_a_valid: dut={dut_a_valid} exp={model.out_a_valid}")
     assert dut_b_valid == model.out_b_valid, (
-            f"{prefix}out_b_valid: dut={dut_b_valid} exp={model.out_b_valid}")
+        f"{prefix}out_b_valid: dut={dut_b_valid} exp={model.out_b_valid}")
     assert dut_first == model.out_first, (
-            f"{prefix}out_first: dut={dut_first} exp={model.out_first}")
+        f"{prefix}out_first: dut={dut_first} exp={model.out_first}")
+    assert dut_capture == model.out_capture, (
+        f"{prefix}out_capture: dut={dut_capture} exp={model.out_capture}")
     assert dut_acc == model.acc, (
         f"{prefix}acc: dut={to_signed(dut_acc, acc_width)} "
         f"exp={model.acc_signed} (raw dut={dut_acc} exp={model.acc})")
     assert dut_out_shadow == model.out_shadow, (
-            f"{prefix}out_shadow: dut={to_signed(dut_out_shadow, acc_width)} "
-            f"exp={model.out_shadow_signed} (raw dut={dut_out_shadow} exp={model.out_shadow})")
+        f"{prefix}out_shadow: dut={to_signed(dut_out_shadow, acc_width)} "
+        f"exp={model.out_shadow_signed} (raw dut={dut_out_shadow} exp={model.out_shadow})")
 
 
 # --------------------------------------------------------------------------- #

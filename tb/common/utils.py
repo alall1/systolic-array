@@ -29,18 +29,19 @@ def golden_matmul(A, B):
     """The golden model for matmuls"""
     return np.asarray(A) @ np.asarray(B)
 
-def pack_a(data, valid, first, data_width):
+def pack_a(data, valid, first, capture, data_width):
     """Packing inputs into the a_payload_t type (data, valid, first)"""
     data_u = to_unsigned(data, data_width)
-    return (data_u << 2) | ((valid & 1) << 1) | (first & 1)
+    return (data_u << 3) | ((valid & 1) << 2) | ((first & 1) << 1) | (capture & 1)
 
 def unpack_a(word, data_width):
     """Slicing the a_payload_t type into data, valid, and first"""
     word  = int(word)
-    first = word & 1
-    valid = (word >> 1) & 1
-    data  = to_signed((word >> 2) & ((1 << data_width) - 1), data_width)
-    return data, valid, first
+    capture = word & 1
+    first = (word >> 1) & 1
+    valid = (word >> 2) & 1
+    data  = to_signed((word >> 3) & ((1 << data_width) - 1), data_width)
+    return data, valid, first, capture
 
 def pack_b(data, valid, data_width):
     """Packing inputs into the b_payload_t type (data, valid)"""

@@ -24,6 +24,7 @@ package pe_pkg;
         logic signed [DATA_WIDTH-1:0] data;
         logic valid;
         logic first;
+        logic capture;
     } a_payload_t;
 
     typedef struct packed {

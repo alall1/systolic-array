@@ -7,7 +7,6 @@ import pe_pkg::*;
     input a_payload_t a_in [0:ARRAY_DIM-1],     // input into the left side of the array; note that the "first" signal propagates through the a_payload_t types
     input b_payload_t b_in [0:ARRAY_DIM-1],     // input into the top side of the array
 
-    input logic capture,
     input logic shift_en,
 
     output logic signed [ACC_WIDTH-1:0] out [0:ARRAY_DIM-1][0:ARRAY_DIM-1], // the output of the grid, the resulting matrix; ready when out_ready = 1
@@ -40,7 +39,6 @@ generate
 
                 .acc(out[row][col]),
 
-                .capture(capture),
                 .shift_en(shift_en),
                 .in_shadow(shadow_bus[row][col]),
                 .out_shadow(shadow_bus[row+1][col]) // actual shadow register of each PE is shadow_bus[row+1]

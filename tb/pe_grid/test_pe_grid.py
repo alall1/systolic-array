@@ -97,11 +97,11 @@ def read_out_grid(dut, acc_width, P, M=None, N=None):
 
 async def drive_schedule(dut, A, B, P, data_width):
     """Drive one A@B (MxK * KxN) through a PxP grid using the unified skew schedule with per-direction valids. Returns n_cycles driven."""
-    a_data, a_valid, a_first, b_data, b_valid, n_cycles = build_skew_schedule(A, B, P)
+    a_data, a_valid, a_first, a_capture, b_data, b_valid, n_cycles = build_skew_schedule(A, B, P)
 
     for t in range(n_cycles):
         for i in range(P):
-            dut.a_in[i].value = pack_a(a_data[i][t], a_valid[i][t], a_first[i][t], data_width)
+            dut.a_in[i].value = pack_a(a_data[i][t], a_valid[i][t], a_first[i][t], a_capture[i][t], data_width)
             dut.b_in[i].value = pack_b(b_data[i][t], b_valid[i][t], data_width)
         await RisingEdge(dut.clk)
         await Timer(1, unit="ns")
@@ -120,11 +120,8 @@ async def drain_out(dut, acc_width, P, M=None, N=None):
 
     grid = np.zeros((P, P), dtype=object)
 
-    # capture current acc values into shadow registers
-    dut.capture.value = 1
-    await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
-    dut.capture.value = 0
+    await RisingEdge(dut.clk)
 
     # shift out P rows; drain_out is combinational (equal to bottom row shadow registers), so sample before the edge
     dut.shift_en.value = 1

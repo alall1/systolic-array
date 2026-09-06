@@ -76,6 +76,7 @@ def build_skew_schedule(A, B, P=None):
     a_data = [[0] * n_cycles for _ in range(P)]
     a_valid = [[0] * n_cycles for _ in range(P)]
     a_first = [[0] * n_cycles for _ in range(P)]
+    a_capture = [[0] * n_cycles for _ in range(P)]
 
     b_data = [[0] * n_cycles for _ in range(P)]
     b_valid = [[0] * n_cycles for _ in range(P)]
@@ -87,10 +88,28 @@ def build_skew_schedule(A, B, P=None):
             a_valid[i][c] = 1
             if k == 0:
                 a_first[i][c] = 1
+        a_capture[i][i + K] = 1
     for j in range(N):
         for k in range(K):
             c = j + k
             b_data[j][c] = int(B[k][j])
             b_valid[j][c] = 1
 
-    return a_data, a_valid, a_first, b_data, b_valid, n_cycles
+    return a_data, a_valid, a_first, a_capture, b_data, b_valid, n_cycles
+
+# debugging for build_skew_schedule
+# A = np.random.randint(-5, 5, size=(5, 5))
+# B = np.random.randint(-5, 5, size=(5, 5))
+
+# a_data, a_valid, a_first, a_cap, b_data, b_valid, n_cycles = build_skew_schedule(A,B,5)
+
+# for i in range(5):
+#     print(A[i])
+# print()
+# for i in range(5):
+#     print(a_first[i])
+# print()
+# for i in range(5):
+#     print(a_cap[i])
+# print()
+# print(n_cycles)

@@ -4,7 +4,7 @@ import pe_pkg::*;
     input logic clk,
     input logic rst_n,  // active low
 
-    input a_payload_t in_a,     // inputted a payload; contains first, capture, valid, and data
+    input a_payload_t in_a,     // inputted a payload; contains first, valid, and data
     output a_payload_t out_a,   // outputted a payload (registered)
 
     input b_payload_t in_b,     // inputted a payload; contains valid, and data
@@ -12,6 +12,7 @@ import pe_pkg::*;
 
     output logic signed [ACC_WIDTH-1:0] acc,        // running total sum, read at drain time. Output of the PE
 
+    input logic capture,                            // pulse that copies current acc -> shadow_out; broadcasted right now so only one input (later will be input + output for propagating)
     input logic shift_en,                           // pulse that enables shifting (shadow_in -> shadow_out)
     input logic signed [ACC_WIDTH-1:0] in_shadow,   // the shadow buffer value shifted down by the top neighbor, copied to shadow_out while shift_en
     output logic signed [ACC_WIDTH-1:0] out_shadow  // the actual shadow buffer register of this PE, shifts to bottom neighbor while shift_en
@@ -39,7 +40,7 @@ always_ff @(posedge clk or negedge rst_n) begin
         else acc <= acc; // acc keeps its value instead of resetting to 0
 
         // shadow buffer logic
-        if (in_a.capture) out_shadow <= acc;
+        if (capture) out_shadow <= acc;
         else if (shift_en) out_shadow <= in_shadow;
         else out_shadow <= out_shadow;
     end

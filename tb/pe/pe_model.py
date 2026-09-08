@@ -28,7 +28,6 @@ class PEModel:
         self.out_b_valid = 0
         self.out_first = 0
         self.out_shadow = 0
-        self.out_capture = 0
 
     def reset(self):
         self.acc = 0
@@ -36,7 +35,6 @@ class PEModel:
         self.out_b_valid = 0
         self.out_first = 0
         self.out_shadow = 0
-        self.out_capture = 0
 
     def step(self, in_a: int, in_b: int, in_a_valid: int, in_b_valid: int, in_first: int = 0, capture: int = 0, shift_en: int = 0, in_shadow: int = 0, rst_n: int = 1):
         if not rst_n:
@@ -44,12 +42,8 @@ class PEModel:
         else:
             if capture:
                 self.out_shadow = self.acc & self.acc_mask
-                self.out_capture = 1
             elif shift_en:
                 self.out_shadow = in_shadow & self.acc_mask
-                self.out_capture = 0
-            else:
-                self.out_capture = 0
 
             self.out_a = to_signed(in_a, self.data_width)
             self.out_b = to_signed(in_b, self.data_width)

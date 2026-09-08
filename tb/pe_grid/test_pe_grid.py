@@ -120,8 +120,8 @@ async def drain_out(dut, acc_width, P, M=None, N=None):
 
     grid = np.zeros((P, P), dtype=object)
 
-    await RisingEdge(dut.clk)
     await Timer(1, unit="ns")
+    await RisingEdge(dut.clk)
 
     # shift out P rows; drain_out is combinational (equal to bottom row shadow registers), so sample before the edge
     dut.shift_en.value = 1

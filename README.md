@@ -13,7 +13,6 @@ Next steps: implement skewed propagating capture; overlapping compute + drain
 	- [ ] double-buffer draining
 		- [x] broadcast capture
 		- [ ] skewed propagating capture
-		- [ ] triple buffer propagating capture
 - [ ] feeder module complete and tested
 - [ ] control FSM module complete and tested
 - [ ] collector module complete and tested
@@ -69,8 +68,7 @@ Next steps: implement skewed propagating capture; overlapping compute + drain
 
 					<img width="616.5" height="398.25" alt="broadcast-capture" src="https://github.com/user-attachments/assets/3b7d31c1-04bb-4bba-99f6-e767c00f46ce" />
 
-			2. skewed, propagating capture: (2n? cycles between matmuls)
-			3. triple-buffer propagating capture: (n? cycles between matmuls)
+			2. skewed, propagating capture: instead of broadcasting capture to all PEs at once (when all are finished), have a "capture" signal propagating through the array from PE to PE. The main advantage of this design is timing: a broadcast capture has to drive n<sup>2</sup> PEs from one source; this can lead to timing and physical-design problems as n grows (buffering, skew on control net). However, a signal that propagates on short wires from PE to PE avoids this problem, even as n grows; the distance between the PEs does not grow with n. This ensures the array can scale without timing or physical placement issues.
 
 ### Future work
 

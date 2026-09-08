@@ -3,7 +3,7 @@
 
 A hardware matrix-multiplication accelerator built on a systolic array of processing elements (PEs). Each PE does a multiply-accumulate; operands stream through the grid diagonally skewed, and results accumulate in place (output-stationary). Larger matrices will be handled by tiling over M, N, and the K reduction dimension. Memory is kept dumb — all intelligence lives in the feeder, address generator, and control FSM.
 
-Next steps: implement skewed propagating capture; overlapping compute + drain
+Next steps: write and test skew_buffer module
 
 ### Current progress
 - [x] PE module complete and tested
@@ -12,6 +12,8 @@ Next steps: implement skewed propagating capture; overlapping compute + drain
 	- [x] MxK * KxN matmul support (PEs outside active range, MxN, are completely inactive)
 	- [x] double-buffer broadcast capture
 - [ ] feeder module complete and tested
+	- [ ] skew_buffer module
+	- [ ] read_sequencer module
 - [ ] control FSM module complete and tested
 - [ ] collector module complete and tested
 - [ ] top module complete and tested
@@ -66,6 +68,9 @@ Next steps: implement skewed propagating capture; overlapping compute + drain
 
 					<img width="616.5" height="398.25" alt="broadcast-capture" src="https://github.com/user-attachments/assets/3b7d31c1-04bb-4bba-99f6-e767c00f46ce" />
 
+- for the feeder module, I've decided to split it into two submodules: skew_buffer and read_sequencer. The role of the feeder module is to read a flat, compressed matrix from memory (eventually from a buffer) and feed the skewed schedule to the pe_grid module.
+	- read_sequencer: reads operands from memory/buffer; each cycle, one A-element per row (essentially a column per cycle) and one B-element per column (essentially a row per cycle) in flat order; not skewed yet. Decodes layout of compressed matrices in the buffer/memory; owns layout decode and offset arithmetic. Also injects "valid" and "first" signals into the a_payload_t and b_payload_t types before passing along to skew_buffer.
+	- skew_buffer: triangular bank of shift-register chains; lane *k* delayed by *k* cycles. (n * (n - 1)) / 2 slots per operand side. Delay is the storage; a payload sits in the chain during its delay. Completely opaque to payload contents, only delaying each payload as one unit without touching anything inside. Input is flat payload lanes from read_sequencer, output is the skewed payload lanes into each grid edge.
 
 ### Future work
 

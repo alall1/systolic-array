@@ -75,22 +75,17 @@ def check(dut, model: PEModel, data_width: int, acc_width: int, ctx: str = ""):
     dut_out_shadow = int(dut.out_shadow.value) & ((1 << acc_width) - 1)
 
     prefix = f"[{ctx}] " if ctx else ""
-    assert dut_out_a == model.out_a, (
-        f"{prefix}out_a: dut={dut_out_a} exp={model.out_a}")
-    assert dut_out_b == model.out_b, (
-        f"{prefix}out_b: dut={dut_out_b} exp={model.out_b}")
-    assert dut_a_valid == model.out_a_valid, (
-        f"{prefix}out_a_valid: dut={dut_a_valid} exp={model.out_a_valid}")
-    assert dut_b_valid == model.out_b_valid, (
-            f"{prefix}out_b_valid: dut={dut_b_valid} exp={model.out_b_valid}")
-    assert dut_first == model.out_first, (
-            f"{prefix}out_first: dut={dut_first} exp={model.out_first}")
+    assert dut_out_a == model.out_a, (f"{prefix}out_a: dut={dut_out_a} exp={model.out_a}")
+    assert dut_out_b == model.out_b, (f"{prefix}out_b: dut={dut_out_b} exp={model.out_b}")
+    assert dut_a_valid == model.out_a_valid, (f"{prefix}out_a_valid: dut={dut_a_valid} exp={model.out_a_valid}")
+    assert dut_b_valid == model.out_b_valid, (f"{prefix}out_b_valid: dut={dut_b_valid} exp={model.out_b_valid}")
+    assert dut_first == model.out_first, (f"{prefix}out_first: dut={dut_first} exp={model.out_first}")
     assert dut_acc == model.acc, (
         f"{prefix}acc: dut={to_signed(dut_acc, acc_width)} "
         f"exp={model.acc_signed} (raw dut={dut_acc} exp={model.acc})")
     assert dut_out_shadow == model.out_shadow, (
-            f"{prefix}out_shadow: dut={to_signed(dut_out_shadow, acc_width)} "
-            f"exp={model.out_shadow_signed} (raw dut={dut_out_shadow} exp={model.out_shadow})")
+        f"{prefix}out_shadow: dut={to_signed(dut_out_shadow, acc_width)} "
+        f"exp={model.out_shadow_signed} (raw dut={dut_out_shadow} exp={model.out_shadow})")
 
 
 # --------------------------------------------------------------------------- #

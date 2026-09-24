@@ -1,18 +1,17 @@
-module skew_buffer 
+module skew_buffer
 import pe_pkg::*;
 (
     input logic clk,
     input logic rst_n,  // active low
 
-    input a_payload_t in_a [0:ARRAY_DIM-1],
+    input a_payload_t in_a [0:ARRAY_DIM-1],     // a column of A, starting from leftmost
     output a_payload_t out_a [0:ARRAY_DIM-1],
 
-    input b_payload_t in_b [0:ARRAY_DIM-1],
+    input b_payload_t in_b [0:ARRAY_DIM-1],     // a row of B, starting from top
     output b_payload_t out_b [0:ARRAY_DIM-1]
 );
 
-// Row i needs i delay registers. Max depth = N-1.
-// sr[i][d] = value of row i, d cycles ago. sr[i][0] is the freshest.
+// row i needs i delay registers -> max depth = ARRAY_DIM-1.
 a_payload_t a_sr [0:ARRAY_DIM-1][0:ARRAY_DIM-1];
 b_payload_t b_sr [0:ARRAY_DIM-1][0:ARRAY_DIM-1];
 
@@ -32,7 +31,7 @@ generate
                 for (int e = 1; e < ARRAY_DIM; e++) b_sr[i][e] <= b_sr[i][e-1];
             end
         end
-        // Row i is tapped off at depth i.
+        
         assign out_a[i] = a_sr[i][i];
         assign out_b[i] = b_sr[i][i];
     end

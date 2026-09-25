@@ -13,10 +13,16 @@
   `define ARRAY_DIM 4
 `endif
 
+// MAX_K : largest supported contraction depth
+`ifndef MAX_K
+  `define MAX_K 1024
+`endif
+
 package pe_pkg;
     localparam int DATA_WIDTH = `DATA_WIDTH;
     localparam int ACC_WIDTH  = `ACC_WIDTH;
     localparam int ARRAY_DIM = `ARRAY_DIM;
+    localparam int MAX_K = `MAX_K;
 
     // A operand (west->east) carries the shared-K "first" bit; B (north->south) does not; width asymmetry is intentional
     // data [MSB] -> first [LSB]

@@ -24,6 +24,10 @@ package pe_pkg;
     localparam int ARRAY_DIM = `ARRAY_DIM;
     localparam int MAX_K = `MAX_K;
 
+    localparam int DIM_W = $clog2(ARRAY_DIM + 1);               // number of bits to address ARRAY_DIM lanes
+    localparam int K_W = $clog2(MAX_K + 1);                     // number of bits to address up to maximum contraction depth value
+    localparam int ADDR_W = $clog2(2 * ARRAY_DIM * ARRAY_DIM);  // number of bits necessary to address ALL points in buffer (holds both A and B)
+
     // A operand (west->east) carries the shared-K "first" bit; B (north->south) does not; width asymmetry is intentional
     // data [MSB] -> first [LSB]
     typedef struct packed {

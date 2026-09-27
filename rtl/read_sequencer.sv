@@ -1,69 +1,103 @@
 module read_sequencer
 import pe_pkg::*;
-#(
-    parameter DIM_W = $clog2(ARRAY_DIM + 1),
-    parameter K_W = $clog2(MAX_K + 1)
-)(
+(
     input logic clk,
     input logic rst_n,  // active low
 
-    input logic read,    // signaling new read
+    input logic start,
 
-    input logic [DIM_W:0] in_M,     // A -> M x K matrix
-    input logic [DIM_W:0] in_N,     // B -> K x N matrix
-    input logic [K_W:0] in_K,       // contraction depth
- 
-    output a_payload_t out_a [0:ARRAY_DIM-1],   // a column of A, starting from leftmost -> skew_buffer
-    output b_payload_t out_b [0:ARRAY_DIM-1]    // a row of B, starting from top -> skew_buffer
+    output logic busy,
+    output logic done,
+
+    input logic [DIM_W-1:0] M,
+    input logic [DIM_W-1:0] N,
+    input logic [K_W-1:0] K,
+
+    output logic rd_en,
+    output logic [K_W-1:0] rd_col_a,    // which column of A (= k)
+    output logic [K_W-1:0] rd_row_b,    // which row of B    (= k)
+
+    // read from buffer
+    input data_t rd_a [0:ARRAY_DIM-1],
+    input data_t rd_b [0:ARRAY_DIM-1],
+
+    output a_payload_t out_a [0:ARRAY_DIM-1],
+    output b_payload_t out_b [0:ARRAY_DIM-1]
 );
+    // config, captured at start and held until reset or done
+    logic [DIM_W-1:0] M_h, N_h;
+    logic [K_W-1:0] K_h;
 
-// matrix dimensions
-logic [DIM_W:0] M;
-logic [DIM_W:0] N;
-logic [K_W:0] K;
+    // k counter and busy, and shadow (_d) aligning control with data returned from buffer one cycle after
+    logic [K_W-1:0] k;      // k (address issued this cycle)
+    logic [K_W-1:0] k_d;    // k (data arriving this cycle)
+    logic busy_d;           // was a real address issued last cycle?
+    logic last_d;           // did last cycle issue the final (k==K-1) address?
 
+    logic issuing, last;
+    assign issuing = busy && (k < K_h);   // a real address goes out this cycle
+    assign last = busy && (k == K_h - 1);
 
-logic [K_W:0] count;
+    always_ff @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            k <= '0;
+            busy <= 1'b0;
+            k_d <= '0;
+            busy_d <= 1'b0;
+            last_d <= 1'b0;
+        end else begin
+            // issue logic
+            if (start && !busy) begin
+                M_h <= M;
+                N_h <= N;
+                K_h <= K;
+                k <= '0;
+                busy <= 1'b1;
+            end else if (busy) begin
+                if (last) busy <= 1'b0; // feed ends after final address issued
+                k <= k + 1'b1;
+            end
 
-// latching M, N, and K and holding stable until next read
-always_ff @(posedge clk or negedge rst_n) begin
-    if (read) begin
-        M <= in_M;
-        N <= in_N;
-        K <= in_K;
+            // delay logic
+            k_d <= k;
+            busy_d <= issuing;   // data next cycle is real if issued this cycle
+            last_d <= last;
+        end
     end
-end
 
-always_ff @(posedge clk or )
+    // address generation, purely combinational; issued same cycle for k (one index per operand)
+    assign rd_en = issuing;
+    assign rd_col_a = k;
+    assign rd_row_b = k;
 
-on start:
-    latch M, N, K, a_base, a_stride, b_base, b_stride   # hold stable for whole feed
-    k <- 0
-    busy <- 1
+    // payload assembly, purely combinational aligned to DATA cycle, wrapped with valid and first bits
+    always_comb begin
+        for (int lane = 0; lane < ARRAY_DIM; lane++) begin
+            // A lane: valid where the grid row exists (lane < M)
+            if (busy_d && lane < M_h) begin
+                out_a[lane].data  = rd_a[lane];
+                out_a[lane].valid = 1'b1;
+                out_a[lane].first = (k_d == '0);
+            end else begin
+                out_a[lane].data  = 'x;
+                out_a[lane].valid = 1'b0;
+                out_a[lane].first = 'x;
+            end
 
-each cycle while busy:
-    for lane in 0 .. n-1:
-        # ---- A lane: element A[lane][k]  = column k, all rows ----
-        if lane < M and k < K:
-            out_a[lane].data  = buffer[ a_base + lane * a_stride + k ]
-            out_a[lane].valid = 1
-        else:
-            out_a[lane].data  = 'x        # don't-care; valid gates it
-            out_a[lane].valid = 0
+            // B lane: valid where the grid col exists (lane < N)
+            if (busy_d && lane < N_h) begin
+                out_b[lane].data  = rd_b[lane];
+                out_b[lane].valid = 1'b1;
+                out_b[lane].first = (k_d == '0);
+            end else begin
+                out_b[lane].data  = 'x;
+                out_b[lane].valid = 1'b0;
+                out_b[lane].first = 'x;
+            end
+        end
+    end
 
-        # ---- B lane: element B[k][lane]  = row k, all cols ----
-        if lane < N and k < K:
-            out_b[lane].data  = buffer[ b_base + k * b_stride + lane ]
-            out_b[lane].valid = 1
-        else:
-            out_b[lane].data  = 'x
-            out_b[lane].valid = 0
-
-    first = (k == 0)          # see note on where this lives
-
-    if k == K-1:
-        busy <- 0
-        done <- 1             # hand off to drain
-    k <- k + 1
+    // done asserted in the DATA cycle of last (last_d)
+    assign done = last_d;
 
 endmodule

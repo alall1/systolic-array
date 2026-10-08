@@ -18,8 +18,8 @@ import pe_pkg::*;
     output logic [K_W-1:0] rd_row_b,    // which row of B    (= k)
 
     // read from buffer
-    input data_t rd_a [0:ARRAY_DIM-1],
-    input data_t rd_b [0:ARRAY_DIM-1],
+    input logic signed [DATA_WIDTH-1:0] rd_a [0:ARRAY_DIM-1],
+    input logic signed [DATA_WIDTH-1:0] rd_b [0:ARRAY_DIM-1],
 
     output a_payload_t out_a [0:ARRAY_DIM-1],
     output b_payload_t out_b [0:ARRAY_DIM-1]
@@ -75,24 +75,22 @@ import pe_pkg::*;
         for (int lane = 0; lane < ARRAY_DIM; lane++) begin
             // A lane: valid where the grid row exists (lane < M)
             if (busy_d && lane < M_h) begin
-                out_a[lane].data  = rd_a[lane];
+                out_a[lane].data = rd_a[lane];
                 out_a[lane].valid = 1'b1;
                 out_a[lane].first = (k_d == '0);
             end else begin
-                out_a[lane].data  = 'x;
+                out_a[lane].data = 'x;
                 out_a[lane].valid = 1'b0;
                 out_a[lane].first = 'x;
             end
 
             // B lane: valid where the grid col exists (lane < N)
             if (busy_d && lane < N_h) begin
-                out_b[lane].data  = rd_b[lane];
+                out_b[lane].data = rd_b[lane];
                 out_b[lane].valid = 1'b1;
-                out_b[lane].first = (k_d == '0);
             end else begin
-                out_b[lane].data  = 'x;
+                out_b[lane].data = 'x;
                 out_b[lane].valid = 1'b0;
-                out_b[lane].first = 'x;
             end
         end
     end

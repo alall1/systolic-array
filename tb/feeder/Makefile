@@ -8,10 +8,10 @@ SIM ?= verilator
 TOPLEVEL_LANG ?= verilog
  
 RTL_DIR ?= ../../rtl
-VERILOG_SOURCES += $(RTL_DIR)/pe_pkg.sv $(RTL_DIR)/skew_buffer.sv
+VERILOG_SOURCES += $(RTL_DIR)/pe_pkg.sv $(RTL_DIR)/skew_buffer.sv $(RTL_DIR)/read_sequencer.sv $(RTL_DIR)/feeder.sv
 
-TOPLEVEL = skew_buffer
-COCOTB_TEST_MODULES = test_skew_buffer
+TOPLEVEL = feeder
+COCOTB_TEST_MODULES = test_feeder
 
 # make the shared common/ importable
 export PYTHONPATH := $(PWD)/../common:$(PYTHONPATH)

@@ -3,7 +3,7 @@
 
 A hardware matrix-multiplication accelerator built on a systolic array of processing elements (PEs). Each PE does a multiply-accumulate; operands stream through the grid diagonally skewed, and results accumulate in place (output-stationary). Larger matrices will be handled by tiling over M, N, and the K reduction dimension. Memory is kept dumb — all intelligence lives in the feeder, address generator, and control FSM.
 
-Next steps: write and test feeder module
+Next steps: write and test control FSM module
 
 ### Current progress
 - [x] PE module complete and tested
@@ -11,7 +11,7 @@ Next steps: write and test feeder module
 	- [x] consecutive matmuls
 	- [x] MxK * KxN matmul support (PEs outside active range, MxN, are completely inactive)
 	- [x] double-buffer broadcast capture
-- [ ] feeder module complete and tested
+- [x] feeder module complete and tested
 	- [x] skew_buffer module
 	- [x] read_sequencer module
 - [ ] control FSM module complete and tested

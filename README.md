@@ -1,9 +1,9 @@
 # Systolic Array Project
 ### Anuj Lall
 
-A hardware matrix-multiplication accelerator built on a systolic array of processing elements (PEs). Each PE does a multiply-accumulate; operands stream through the grid diagonally skewed, and results accumulate in place (output-stationary). Larger matrices will be handled by tiling over M, N, and the K reduction dimension. Memory is kept dumb — all intelligence lives in the feeder, address generator, and control FSM.
+A hardware matrix-multiplication accelerator built on a systolic array of processing elements (PEs). Each PE does a multiply-accumulate; operands stream through the grid diagonally skewed, and results accumulate in place (output-stationary). Larger matrices are tiled over the output dimensions M and N by the control FSM (`tile_ctrl`); tiling over the K reduction dimension is planned. Memory is kept dumb — all intelligence lives in the feeder, address generator, and control FSM.
 
-Next steps: write and test control FSM module
+Next steps: collector module (drains each output tile from `drain_out` into the result matrix), then the operand buffer and top module
 
 ### Current progress
 - [x] PE module complete and tested
@@ -14,7 +14,13 @@ Next steps: write and test control FSM module
 - [x] feeder module complete and tested
 	- [x] skew_buffer module
 	- [x] read_sequencer module
-- [ ] control FSM module complete and tested
+- [x] control FSM module (`tile_ctrl`) complete and tested
+	- [x] M/N output tiling, including partial edge tiles (M or N not a multiple of the grid size)
+	- [x] contract written first: [docs/fsm_contract.md](docs/fsm_contract.md)
+	- [x] Python golden model + pure schedule helper, validated standalone with pytest
+	- [x] cocotb lockstep testbench, concurrent protocol/schedule monitors, functional coverage closure
+	- [x] SVA assertions in the RTL, lint clean, mutation-tested (10 planted bugs, all caught)
+	- [x] integration smoke test: `tile_ctrl` + feeder + pe_grid computes tiled matmuls equal to numpy
 - [ ] collector module complete and tested
 - [ ] top module complete and tested
 
@@ -72,11 +78,37 @@ Next steps: write and test control FSM module
 	- read_sequencer: reads operands from memory/buffer; each cycle, one A-element per row (essentially a column per cycle) and one B-element per column (essentially a row per cycle) in flat order; not skewed yet. Decodes layout of compressed matrices in the buffer/memory; owns layout decode and offset arithmetic. Also injects "valid" and "first" signals into the a_payload_t and b_payload_t types before passing along to skew_buffer.
 	- skew_buffer: triangular bank of shift-register chains; lane *k* delayed by *k* cycles. (n * (n - 1)) / 2 slots per operand side. Delay is the storage; a payload sits in the chain during its delay. Completely opaque to payload contents, only delaying each payload as one unit without touching anything inside. Input is flat payload lanes from read_sequencer, output is the skewed payload lanes into each grid edge.
 
+- the control FSM, `tile_ctrl`, only emits control signals: it never touches data, addresses, or the valid/first bits (read_sequencer owns the k loop, the read addresses, and valid/first). Full contract: [docs/fsm_contract.md](docs/fsm_contract.md).
+	- per output tile: ISSUE (start the feeder) → FEED (wait for the feeder's `done`) → FLUSH (wait for the last operands to cross the skew buffer and grid) → CAPTURE (copy every accumulator into its shadow register) → DRAIN (shift the shadow registers out) → next tile or DONE. Illegal commands (a zero dimension, or one over its limit) go to REJECT, which pulses `done` and `error` together.
+	- cycles per tile = K + M<sub>t</sub> + N<sub>t</sub> + n + 1, where M<sub>t</sub>, N<sub>t</sub> are the tile's rows/cols (≤ n). Job latency = T<sub>m</sub>·T<sub>n</sub>·(K + n + 1) + T<sub>n</sub>·M + T<sub>m</sub>·N, with T<sub>m</sub> = ⌈M/n⌉ and T<sub>n</sub> = ⌈N/n⌉ tiles.
+	- CAPTURE lands in exactly the cycle the last active PE's accumulator becomes final (zero slack): capturing one cycle earlier corrupts only the bottom-right element of each tile, which both the Python model and the RTL integration test confirm.
+	- edge tiles need nothing special from the FSM: it passes the smaller M<sub>t</sub>/N<sub>t</sub> to the feeder, and the inactive PEs stay idle exactly as before. They do keep stale accumulators from earlier tiles, so the collector must only keep the M<sub>t</sub> × N<sub>t</sub> region of each drained tile.
+	- v1 is deliberately serialized (the next tile waits for the previous drain); overlapping them is listed below.
+
+### Running the tests
+Each module has its own cocotb directory under `tb/` (Verilator + cocotb, from the repo's venv):
+```
+cd tb/tile_ctrl && make               # FSM: lockstep + monitors + coverage (SVA on)
+cd tb/tile_ctrl && make model         # FSM golden model, plain pytest
+cd tb/tile_ctrl_integration && make   # tile_ctrl + feeder + pe_grid vs numpy
+```
+Useful knobs: `ARRAY_DIM=<n>`, `SEED=<n>`, `WAVES=1` (GTKWave dump), `SVA=0`, and for `tb/tile_ctrl`, `LOCKSTEP=0` (monitors judge alone).
+
+### Known issues (found while building the FSM, not yet fixed)
+- read_sequencer hangs on K = 0 (`busy` stays high until reset); `tile_ctrl` rejects K = 0 so it never reaches the feeder.
+- skew_buffer uses a synchronous reset while every other module is asynchronous (Verilator `SYNCASYNCNET` lint warning).
+- skew_buffer delays lane *k* by *k* + 1 cycles (the relative skew is still correct) and declares n × n registers per side rather than the triangular count.
+- small cleanups: unused `count`/`FINISH` in pe_grid, unused `ADDR_W` in pe_pkg, `drain_out` is unsigned while `out` is signed, missing newline at the end of `feeder.sv`.
+
 ### Future work
 
-**dummy memory + feeder / address generator** Flat, row-major memories (`address = base + row*stride + col`) for inputs and output. The real work is the feeder that walks tiles from flat memory and produces the skewed operand streams — the memory itself is trivial.
+**collector** Consumes `drain_out` after each `capture` (grid row n-1 first, one row further up per cycle), keeps only the M<sub>t</sub> × N<sub>t</sub> region, and places it using `tile_m`/`tile_n`. Today this exists only as a Python stand-in in the integration test.
 
-**control FSM with tiling loops** Nested loops over output tiles (M, N) with an inner K-reduction. Emits control signals only (`first_tile`, `load_en`, `drain_en`, addresses) and never touches data. Asserts `first_tile` on `k == 0`, skewed to the array diagonal. Keep the loop-nest counters separate from the array's internal cycle counter.
+**dummy memory / operand buffer** Flat, row-major memories (`address = base + row*stride + col`) for inputs and output. The feeder already produces the skewed operand streams; what is missing is a buffer that serves the operand tile named by `tile_m`/`tile_n` with a 1-cycle read (also a Python stand-in today).
+
+**K-tiling** Accumulate partial sums across passes so K can exceed `MAX_K`. Needs an upstream change: read_sequencer always asserts `first` on k = 0, which overwrites the accumulators every pass.
+
+**overlapped tiles** Let tile *i*'s capture/drain run during tile *i+1*'s feed, which the shadow-register double buffer was built for. The legal capture window is derived in the contract; this would cut the per-tile cost to roughly max(K + 1, K + M<sub>t</sub> + N<sub>t</sub> − 2, n) cycles.
 
 **valid/ready handshake interfaces** Explicit transfer contract on feeder→array and array→output: a transfer happens only when `valid && ready`. `valid` must not depend combinationally on `ready`; once high, data stays stable until the transfer completes. Backpressure propagates — a stalled output freezes the array with no dropped results. Optionally AXI-Stream naming, deliberately not full AXI4-MM.
 

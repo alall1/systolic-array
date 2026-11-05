@@ -1,6 +1,7 @@
 // Integration harness (testbench only, not product RTL): tile_ctrl drives the
-// unchanged feeder + pe_grid. The operand buffer and the drain collector live in
-// the Python testbench; tile_m/tile_n tell the buffer which operand tile to serve.
+// unchanged feeder + pe_grid, and collector turns the grid's drain into row
+// writes of C. The operand buffer and the result memory live in the Python
+// testbench; tile_m/tile_n tell the buffer which operand tile to serve.
 module tile_ctrl_integration_top
 import pe_pkg::*;
 #(
@@ -11,7 +12,9 @@ import pe_pkg::*;
     localparam int TILES_M = (MAX_M + ARRAY_DIM - 1) / ARRAY_DIM,
     localparam int TILES_N = (MAX_N + ARRAY_DIM - 1) / ARRAY_DIM,
     localparam int TM_W    = (TILES_M > 1) ? $clog2(TILES_M) : 1,
-    localparam int TN_W    = (TILES_N > 1) ? $clog2(TILES_N) : 1
+    localparam int TN_W    = (TILES_N > 1) ? $clog2(TILES_N) : 1,
+    localparam int ROW_W   = (MAX_M > 1) ? $clog2(MAX_M) : 1,
+    localparam int COL_W   = (MAX_N > 1) ? $clog2(MAX_N) : 1
 )
 (
     input  logic clk,
@@ -35,11 +38,12 @@ import pe_pkg::*;
     output logic [TM_W-1:0] tile_m,
     output logic [TN_W-1:0] tile_n,
 
-    // drain port + what the collector needs to place rows
-    output logic [ACC_WIDTH-1:0] drain_out [0:ARRAY_DIM-1],
-    output logic capture,
-    output logic [DIM_W-1:0] feed_M,
-    output logic [DIM_W-1:0] feed_N,
+    // result memory write port (from collector)
+    output logic wr_en,
+    output logic [ROW_W-1:0] wr_row,
+    output logic [COL_W-1:0] wr_col,
+    output logic [ARRAY_DIM-1:0] wr_lane_en,
+    output logic signed [ACC_WIDTH-1:0] wr_data [0:ARRAY_DIM-1],
 
     // observation only (system-level checks)
     output logic feed_start,
@@ -47,8 +51,10 @@ import pe_pkg::*;
     output logic feeder_busy
 );
 
+logic [DIM_W-1:0] feed_M, feed_N;
 logic [K_W-1:0] feed_K;
-logic shift_en;
+logic capture, shift_en;
+logic [ACC_WIDTH-1:0] drain_out [0:ARRAY_DIM-1];
 a_payload_t grid_a [0:ARRAY_DIM-1];
 b_payload_t grid_b [0:ARRAY_DIM-1];
 logic signed [ACC_WIDTH-1:0] grid_acc [0:ARRAY_DIM-1][0:ARRAY_DIM-1];   // unused: results leave via drain
@@ -101,6 +107,23 @@ pe_grid u_grid (
     .shift_en(shift_en),
     .out(grid_acc),
     .drain_out(drain_out)
+);
+
+collector #(.MAX_M(MAX_M), .MAX_N(MAX_N)) u_collector (
+    .clk(clk),
+    .rst_n(rst_n),
+    .capture(capture),
+    .shift_en(shift_en),
+    .tile_m(tile_m),
+    .tile_n(tile_n),
+    .tile_rows(feed_M),
+    .tile_cols(feed_N),
+    .drain_out(drain_out),
+    .wr_en(wr_en),
+    .wr_row(wr_row),
+    .wr_col(wr_col),
+    .wr_lane_en(wr_lane_en),
+    .wr_data(wr_data)
 );
 
 endmodule

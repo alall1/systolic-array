@@ -356,13 +356,13 @@ Consequences that are part of the contract:
 12. **`MAX_M` / `MAX_N` are `tile_ctrl` module parameters**, not `pe_pkg` defines.
 13. **The cocotb suite only covers part of the parameter space.** It needs `MAX_M, MAX_N ≥ 3·ARRAY_DIM + 1` and `MAX_K ≥ ARRAY_DIM + 1`, because the directed shapes must be drivable on the ports. Smaller limits are refused with a clear message rather than tested. When a `MAX_*` is 2^W − 1 its over-limit value cannot be driven at all, so those commands are skipped and the `reject_over_limit` coverage item is waived only if *every* limit is 2^W − 1.
 14. **The RTL assertions do not cover reset or X.** They are disabled while reset is asserted (gated by a checker-only, async-reset `sva_armed` flop), so async-reset behaviour is checked only by the cocotb `ProtocolMonitor` and `Env.reset`. Verilator is 2-state, so there are no `$isunknown` checks; the cocotb snapshot rejects X/Z on every port instead. §9.11 is a system property, checked in `tb/tile_ctrl_integration/`.
-15. **The integration test is a smoke test, not a product top.** `tile_ctrl_integration_top.sv` lives under `tb/`, the operand buffer and drain collector are Python stand-ins, and it runs at a single configuration (ARRAY_DIM = 4).
+15. **The integration test is a smoke test, not a product top.** `tile_ctrl_integration_top.sv` lives under `tb/` and wires `tile_ctrl` + feeder + `pe_grid` + `collector`. The operand buffer and result memory are Python stand-ins.
 
 ## 12. Open questions (deferred, not blocking v1)
 
 - **Q1. Overlap.** Should v2 overlap capture/drain with the next tile's feed? The legal window for `capture` is [K + M_t + N_t + 1, next start + 3] in feeder-relative edges (Phase 0), which would bring the tile period down to about max(K + 1, K + M_t + N_t − 2, n) plus ISSUE. That needs drain to run as a second concurrent sequencer.
 - **Q2. Parameter home.** Move `MAX_M` / `MAX_N` into `pe_pkg` alongside `MAX_K` once modifying the package is acceptable?
-- **Q3. Collector interface.** Should the FSM emit a drain-row index / valid, or should the collector derive it from `capture` plus `tile_m` / `tile_n` / `feed_M` / `feed_N`? Decide when the collector is designed.
+- **Q3. Collector interface.** *Resolved* by `docs/collector_contract.md`: no FSM change. The collector latches `tile_m`/`tile_n`/`feed_M`/`feed_N` at `capture` and follows `shift_en`.
 - **Q4. Tile order.** Row-major (current) versus column-major only matters once operand reuse or buffering exists.
 - **Q5. Error reporting.** Sticky status or cause code instead of a pulse?
 - **Q6. Feeder `busy`.** Should the FSM also check `feeder.busy == 0` before ISSUE as a defensive measure? Under this contract it is redundant.

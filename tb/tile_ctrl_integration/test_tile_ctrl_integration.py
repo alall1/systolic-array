@@ -1,18 +1,24 @@
 """
-cocotb integration smoke test: tile_ctrl drives the UNCHANGED feeder + pe_grid.
+cocotb system smoke test: tile_ctrl drives the UNCHANGED feeder + pe_grid, and
+collector turns the grid's drain into row writes of C.
 
 The testbench plays the two blocks that do not exist yet:
   - operand buffer: 1-cycle registered read, serves A[tile_m*n + lane][k] and
     B[k][tile_n*n + lane] for the address + tile ids presented one cycle earlier;
     junk otherwise (and on lanes >= M_t / >= N_t) so valid masking is exercised
-  - drain collector: after each capture, drain_out shows grid row n-1, then one
-    row further up per cycle (contract §6.1); only the M_t x N_t region is kept
+  - result memory: applies collector's row writes (wr_row, wr_col + lane j for
+    each enabled lane) and nothing else; it does no placement of its own
 
 Golden model: numpy A @ B. Jobs run back-to-back on ONE grid with no reset, so
 stale accumulators in inactive PEs of edge tiles are part of the test.
 
-System-level checks (concurrent monitor): contract §9.11 (feed_done only in
-FEED), feed_start never while the feeder is busy, job latency == L.
+System-level checks:
+  - fsm_contract §9.11 (feed_done only in FEED), feed_start never while the
+    feeder is busy, job latency == L
+  - collector_contract §7.6-7: every C element written exactly once, nothing
+    outside M x N or outside a job, last write in tile_ctrl's done cycle
+  - the collector's out-of-contract-input assertions are live in this build,
+    so tile_ctrl is also checked to never capture mid-drain or shift idle
 
 Optional env vars: SEED (default 12345)
 """
@@ -24,6 +30,7 @@ import cocotb
 import numpy as np
 from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge, Timer
+from cocotb.utils import get_sim_time
 
 from utils import to_signed, golden_matmul
 
@@ -55,9 +62,10 @@ class System:
         self.rng = random.Random(p.seed)
         self.A = None
         self.B = None
-        self.C = None
+        self.mem = None             # {(row, col): value} for the job in flight, None between jobs
+        self.last_write_ns = None
         self.errors = []
-        self.tiles_collected = 0
+        self.rows_written = 0
 
     # ------------------------------------------------------------------ #
     async def operand_buffer(self):
@@ -84,27 +92,26 @@ class System:
             else:
                 captured = None
 
-    async def drain_collector(self):
+    async def result_memory(self):
+        """Dumb row-write memory: commits what the write port shows each cycle."""
         dut, n, aw = self.dut, self.p.n, self.p.acc_width
-        job = None
         while True:
             await RisingEdge(dut.clk)
             await Timer(1, unit="ns")
-            if job is not None:
-                r = job["r"]
-                for j in range(n):
-                    job["rows"].setdefault(r, [0] * n)[j] = to_signed(int(dut.drain_out[j].value), aw)
-                job["r"] -= 1
-                if job["r"] < 0:
-                    for i in range(job["M_t"]):
-                        for j in range(job["N_t"]):
-                            self.C[job["tm"] * n + i][job["tn"] * n + j] = job["rows"][i][j]
-                    self.tiles_collected += 1
-                    job = None
-            if int(dut.capture.value):          # sampled by the grid on the coming edge
-                assert job is None, "capture while previous tile still draining"
-                job = dict(tm=int(dut.tile_m.value), tn=int(dut.tile_n.value),
-                           M_t=int(dut.feed_M.value), N_t=int(dut.feed_N.value), r=n - 1, rows={})
+            if not int(dut.wr_en.value):
+                continue
+            if self.mem is None:
+                self.errors.append("collector wrote outside a job")
+                continue
+            row, col, lanes = int(dut.wr_row.value), int(dut.wr_col.value), int(dut.wr_lane_en.value)
+            for j in range(n):
+                if lanes >> j & 1:
+                    key = (row, col + j)
+                    if key in self.mem:
+                        self.errors.append(f"C{key} written twice")
+                    self.mem[key] = to_signed(int(dut.wr_data[j].value), aw)
+            self.rows_written += 1
+            self.last_write_ns = get_sim_time(unit="ns")
 
     async def system_monitor(self):
         dut = self.dut
@@ -125,7 +132,7 @@ class System:
         M, K = A.shape
         N = B.shape[1]
         self.A, self.B = A, B
-        self.C = np.zeros((M, N), dtype=object)
+        self.mem = {}
         dut.start.value = 1
         dut.M.value, dut.N.value, dut.K.value = M, N, K
         await RisingEdge(dut.clk)
@@ -139,13 +146,21 @@ class System:
             await Timer(1, unit="ns")
         else:
             raise AssertionError(f"M={M} N={N} K={K}: no done within {L + 5} cycles")
-        await Timer(1, unit="ns")       # row 0 is collected in this same timestep: let the collector run first
+        done_ns = get_sim_time(unit="ns")
+        await Timer(1, unit="ns")       # the last row is written in this same timestep: let the memory run first
+        mem, self.mem = self.mem, None
+        assert not self.errors, "\n".join(self.errors[:10])
+        outside = sorted(k for k in mem if not (k[0] < M and k[1] < N))
+        assert not outside, f"M={M} N={N} K={K}: written outside C: {outside[:8]}"
+        missing = [(i, j) for i in range(M) for j in range(N) if (i, j) not in mem]
+        C = np.array([[mem.get((i, j), 0) for j in range(N)] for i in range(M)], dtype=object)
         exp = golden_matmul(A, B)       # data first: the result matters more than the timing
-        assert np.array_equal(self.C.astype(np.int64), exp), \
-            f"M={M} N={N} K={K}\n got=\n{self.C}\n exp=\n{exp}"
+        assert not missing and np.array_equal(C.astype(np.int64), exp), \
+            f"M={M} N={N} K={K} (missing {missing[:8]})\n got=\n{C}\n exp=\n{exp}"
+        assert self.last_write_ns == done_ns, \
+            f"M={M} N={N} K={K}: last write at {self.last_write_ns} ns, done at {done_ns} ns"
         assert t == L, f"M={M} N={N} K={K}: done at t={t}, contract L={L}"
         assert not int(dut.error.value)
-        assert not self.errors, "\n".join(self.errors[:10])
         dut._log.info(f"M={M:2} N={N:2} K={K:2}: {-(-M // n) * -(-N // n)} tiles, {L} cycles, C == A@B")
 
 
@@ -165,7 +180,7 @@ async def make_system(dut):
     dut.rst_n.value = 1
     s = System(dut, p)
     s.A, s.B = np.zeros((1, 1), dtype=int), np.zeros((1, 1), dtype=int)
-    for coro in (s.operand_buffer(), s.drain_collector(), s.system_monitor()):
+    for coro in (s.operand_buffer(), s.result_memory(), s.system_monitor()):
         cocotb.start_soon(coro)
     return s
 
@@ -184,7 +199,7 @@ async def test_directed_matmuls(dut):
     for (M, N, K) in [(n, n, n), (1, 1, 1), (2 * n + 1, n - 1, 3), (1, 3 * n, 2),
                       (3 * n, 1, 1), (n + 1, 2 * n + 1, 5), (2 * n, 2 * n, 2)]:
         await s.run_job(*rand_ops(s.rng, M, N, K))
-    assert s.tiles_collected > 0
+    assert s.rows_written > 0
 
 
 @cocotb.test()

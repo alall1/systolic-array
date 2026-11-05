@@ -1,9 +1,9 @@
-# cocotb Makefile for the tile_ctrl + feeder + pe_grid integration smoke test
+# cocotb Makefile for the system smoke test: tile_ctrl + feeder + pe_grid + collector
 #
 #   make
 #   make WAVES=1         # run + dump waves for GTKWave
 #   make SEED=<n>
-#   make SVA=0           # build without the tile_ctrl assertions (on by default)
+#   make SVA=0           # build without the tile_ctrl / collector assertions (on by default)
 #   make clean
 
 SIM ?= verilator
@@ -12,7 +12,7 @@ TOPLEVEL_LANG ?= verilog
 RTL_DIR ?= ../../rtl
 VERILOG_SOURCES += $(RTL_DIR)/pe_pkg.sv $(RTL_DIR)/pe.sv $(RTL_DIR)/pe_grid.sv \
                    $(RTL_DIR)/skew_buffer.sv $(RTL_DIR)/read_sequencer.sv $(RTL_DIR)/feeder.sv \
-                   $(RTL_DIR)/tile_ctrl.sv $(PWD)/tile_ctrl_integration_top.sv
+                   $(RTL_DIR)/tile_ctrl.sv $(RTL_DIR)/collector.sv $(PWD)/tile_ctrl_integration_top.sv
 
 TOPLEVEL = tile_ctrl_integration_top
 COCOTB_TEST_MODULES = test_tile_ctrl_integration

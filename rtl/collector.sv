@@ -1,6 +1,7 @@
 // Drain collector: turns pe_grid's drain stream into row writes of C.
 // After each capture, drain_out shows grid row n-1, then one row further up per
-// shift_en; rows < M_t are written at global row tile_m*n + r, lanes < N_t only.
+// shift_en; rows < M_t are written at global row tile_m*n + r, tile column
+// tile_n, lanes < N_t only.
 // Data passes through untouched. Contract: docs/collector_contract.md
 module collector
 import pe_pkg::*;
@@ -11,8 +12,7 @@ import pe_pkg::*;
     localparam int TILES_N = (MAX_N + ARRAY_DIM - 1) / ARRAY_DIM,
     localparam int TM_W    = (TILES_M > 1) ? $clog2(TILES_M) : 1,
     localparam int TN_W    = (TILES_N > 1) ? $clog2(TILES_N) : 1,
-    localparam int ROW_W   = (MAX_M > 1) ? $clog2(MAX_M) : 1,      // global row of C
-    localparam int COL_W   = (MAX_N > 1) ? $clog2(MAX_N) : 1       // global column of lane 0
+    localparam int ROW_W   = (MAX_M > 1) ? $clog2(MAX_M) : 1       // global row of C
 )
 (
     input  logic clk,
@@ -32,7 +32,7 @@ import pe_pkg::*;
     // result write port: one row of C per wr_en cycle
     output logic wr_en,
     output logic [ROW_W-1:0] wr_row,
-    output logic [COL_W-1:0] wr_col,
+    output logic [TN_W-1:0] wr_tile_n,                      // lane j is column wr_tile_n*n + j
     output logic [ARRAY_DIM-1:0] wr_lane_en,                // lane j written iff j < N_t
     output logic signed [ACC_WIDTH-1:0] wr_data [0:ARRAY_DIM-1]
 );
@@ -110,7 +110,7 @@ end
 always_comb begin
     wr_en  = active && fresh && (DIM_W'(row) < rows);
     wr_row = wr_en ? ROW_W'(int'(tm) * ARRAY_DIM + int'(row)) : '0;
-    wr_col = wr_en ? COL_W'(int'(tn) * ARRAY_DIM) : '0;
+    wr_tile_n = wr_en ? tn : '0;
     for (int j = 0; j < ARRAY_DIM; j++) begin
         wr_lane_en[j] = wr_en && (j < int'(cols));
         wr_data[j]    = wr_en ? $signed(drain_out[j]) : '0;
@@ -151,7 +151,7 @@ end
 
 logic sva_port_zero, sva_data_through;
 always_comb begin
-    sva_port_zero    = (wr_row == '0) && (wr_col == '0) && (wr_lane_en == '0);
+    sva_port_zero    = (wr_row == '0) && (wr_tile_n == '0) && (wr_lane_en == '0);
     sva_data_through = 1'b1;
     for (int j = 0; j < ARRAY_DIM; j++) begin
         sva_port_zero    = sva_port_zero && (wr_data[j] == '0);
@@ -169,13 +169,13 @@ a_idle_port_is_zero: assert property (@(posedge clk) disable iff (!sva_armed)
 a_lanes_are_thermometer: assert property (@(posedge clk) disable iff (!sva_armed)
     wr_en |-> (wr_lane_en != '0) && ((wr_lane_en & (wr_lane_en + 1'b1)) == '0));
 a_write_inside_c: assert property (@(posedge clk) disable iff (!sva_armed)
-    wr_en |-> (int'(wr_row) < MAX_M) && (int'(wr_col) % ARRAY_DIM == 0)
-              && (int'(wr_col) + $countones(wr_lane_en) <= MAX_N));
+    wr_en |-> (int'(wr_row) < MAX_M) && (int'(wr_tile_n) < TILES_N)
+              && (int'(wr_tile_n) * ARRAY_DIM + $countones(wr_lane_en) <= MAX_N));
 a_data_passes_through: assert property (@(posedge clk) disable iff (!sva_armed)
     wr_en |-> sva_data_through);
 a_write_lands_in_tile: assert property (@(posedge clk) disable iff (!sva_armed)
     wr_en |-> (int'(wr_row) == int'(tm) * ARRAY_DIM + int'(row))
-              && (int'(wr_col) == int'(tn) * ARRAY_DIM)
+              && (wr_tile_n == tn)
               && ($countones(wr_lane_en) == int'(cols)));
 
 // §7.2: rows of one tile are written bottom-up, one apart, M_t of them per full drain

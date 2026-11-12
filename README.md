@@ -3,7 +3,7 @@
 
 A hardware matrix-multiplication accelerator built on a systolic array of processing elements (PEs). Each PE does a multiply-accumulate; operands stream through the grid diagonally skewed, and results accumulate in place (output-stationary). Larger matrices are tiled over the output dimensions M and N by the control FSM (`tile_ctrl`); tiling over the K reduction dimension is planned. Memory is kept dumb — all intelligence lives in the feeder, address generator, and control FSM.
 
-Next steps: operand buffer / dummy memory (serves the operand tile named by `tile_m`/`tile_n`), then the top module
+Next steps: top module (host interface around the system that the integration test already wires up)
 
 ### Current progress
 - [x] PE module complete and tested
@@ -27,6 +27,13 @@ Next steps: operand buffer / dummy memory (serves the operand tile named by `til
 	- [x] cocotb lockstep testbench, concurrent write-port/tile-write monitors, functional coverage closure
 	- [x] SVA assertions in the RTL, lint clean, mutation-tested
 	- [x] system smoke test: `tile_ctrl` + feeder + pe_grid + `collector` writes C equal to numpy, each element exactly once
+- [x] operand + result memories (`lane_ram`, used three times) complete and tested
+	- [x] contract written first: [docs/memory_contract.md](docs/memory_contract.md)
+	- [x] tile-word layout: every address is a concatenation of existing indices, no address arithmetic
+	- [x] Python golden model + layout helpers, validated with a closed-loop tiled matmul through all the other models
+	- [x] cocotb lockstep testbench, read scoreboard + hold monitor, functional coverage closure
+	- [x] SVA assertions in the RTL, lint clean, mutation-tested
+	- [x] system test: every byte of A, B and C goes through RTL; Python only plays the host
 - [ ] top module complete and tested
 
 ### Notes
@@ -93,6 +100,10 @@ Next steps: operand buffer / dummy memory (serves the operand tile named by `til
 	- it must latch `tile_m`/`tile_n`/M<sub>t</sub>/N<sub>t</sub> at `capture`: by the time row 0 reaches `drain_out`, `tile_ctrl` is already issuing the next tile and has moved them on. A collector that reads them live writes row 0 of every tile into the next tile's place (the system test catches this as double writes).
 	- it follows `shift_en` rather than counting cycles after `capture`, so it stays correct if a later version stalls or overlaps the drain.
 	- the write port is not registered, so the last write of a job lands in `tile_ctrl`'s `done` cycle: `done` already means "all of C is written by the end of this cycle".
+- the memories store data in a **tile-word layout**: one word holds the n lanes that move together in one cycle, so every address is a concatenation of indices that already exist on some port. A is stored **transposed** (word `{tile_m, k}` holds `A[tile_m·n + l][k]`), so the n rows the feeder needs each cycle come from one wide read instead of n banks; B is word `{tile_n, k}`; C is word `{row, tile_n}`. Full contract: [docs/memory_contract.md](docs/memory_contract.md).
+	- one generic `lane_ram` (per-lane write enables, registered read-first read, no reset) is instantiated three times; the layout lives entirely in the address wiring.
+	- the collector sends the tile column `wr_tile_n` rather than the element column, because recovering `tile_n` from `tile_n·n` would need a divide by n.
+	- the host must start reading C the cycle **after** `done`: the job's last row is committed on the edge that ends the `done` cycle, and a read on that same edge returns the old word (the system test's own host got this wrong the first time).
 
 ### Running the tests
 Each module has its own cocotb directory under `tb/` (Verilator + cocotb, from the repo's venv):
@@ -101,7 +112,9 @@ cd tb/tile_ctrl && make               # FSM: lockstep + monitors + coverage (SVA
 cd tb/tile_ctrl && make model         # FSM golden model, plain pytest
 cd tb/collector && make              # collector: lockstep + monitors + coverage (SVA on)
 cd tb/collector && make model        # collector golden model, plain pytest
-cd tb/tile_ctrl_integration && make   # tile_ctrl + feeder + pe_grid + collector vs numpy
+cd tb/lane_ram && make               # lane_ram: lockstep + monitors + coverage (SVA on)
+cd tb/lane_ram && make model         # lane_ram model + tile layout, plain pytest
+cd tb/tile_ctrl_integration && make   # whole system (incl. A/B/C lane_rams) vs numpy
 ```
 Useful knobs: `ARRAY_DIM=<n>`, `SEED=<n>`, `WAVES=1` (GTKWave dump), `SVA=0`, and for `tb/tile_ctrl`, `LOCKSTEP=0` (monitors judge alone).
 
@@ -112,8 +125,6 @@ Useful knobs: `ARRAY_DIM=<n>`, `SEED=<n>`, `WAVES=1` (GTKWave dump), `SVA=0`, an
 - small cleanups: unused `count`/`FINISH` in pe_grid, unused `ADDR_W` in pe_pkg, `drain_out` is unsigned while `out` is signed, missing newline at the end of `feeder.sv`.
 
 ### Future work
-
-**dummy memory / operand buffer** Flat, row-major memories (`address = base + row*stride + col`) for inputs and output. The feeder already produces the skewed operand streams; what is missing is a buffer that serves the operand tile named by `tile_m`/`tile_n` with a 1-cycle read, and a result memory that takes the collector's row writes (`wr_row`, `wr_col`, per-lane enables). Both are Python stand-ins in the system test today.
 
 **K-tiling** Accumulate partial sums across passes so K can exceed `MAX_K`. Needs an upstream change: read_sequencer always asserts `first` on k = 0, which overwrites the accumulators every pass.
 

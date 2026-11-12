@@ -25,7 +25,7 @@ SEED = int(os.environ.get("SEED", "20261104"))
 MAX_M = 64
 MAX_N = 64
 ACC_WIDTH = 32
-IDLE_OUT = dict(wr_en=False, wr_row=0, wr_col=0, wr_lane_en=0)
+IDLE_OUT = dict(wr_en=False, wr_row=0, wr_tile_n=0, wr_lane_en=0)
 
 
 def idle(o, n):
@@ -74,7 +74,7 @@ def check_tile(bench, t_cap, tile, acc, writes):
     assert len(writes) == len(exp), f"{len(writes)} writes, expected {len(exp)}"
     for (t, o), (off, r, row, col, lanes) in zip(writes, exp):
         assert t == t_cap + off, f"grid row {r} written at t={t}, expected {t_cap + off}"
-        assert (o["wr_row"], o["wr_col"], o["wr_lane_en"]) == (row, col, lanes)
+        assert (o["wr_row"], o["wr_tile_n"], o["wr_lane_en"]) == (row, col, lanes)
         assert o["wr_data"] == acc[r], f"row {r} data"
 
 # --------------------------------------------------------------------------- #
@@ -92,6 +92,8 @@ def test_reset_and_idle():
 def test_expected_tile_writes_examples():
     """docs/collector_contract.md §5.1 worked example: n=4, tile (1,0), 2x3."""
     assert expected_tile_writes(1, 0, 2, 3, 4) == [(2, 1, 5, 0, 0b0111), (3, 0, 4, 0, 0b0111)]
+    # v1.1: the column field is the tile index, not tile_n*n
+    assert expected_tile_writes(0, 2, 1, 1, 4) == [(3, 0, 0, 2, 0b0001)]
 
 # --------------------------------------------------------------------------- #
 # 2. one tile, v1 timing: every shape, data pass-through, signedness
@@ -259,7 +261,7 @@ class System:
                 writes_per_capture[-1] += 1
                 for j in range(n):
                     if w["wr_lane_en"] >> j & 1:
-                        key = (w["wr_row"], w["wr_col"] + j)
+                        key = (w["wr_row"], w["wr_tile_n"] * n + j)
                         assert key not in mem, f"C{key} written twice"
                         mem[key] = w["wr_data"][j]
                 last_write = t

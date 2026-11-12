@@ -1,6 +1,6 @@
 # `collector` — drain collector contract (v1)
 
-Status: **implemented (v1)** in `rtl/collector.sv`, with decisions D1–D4 as recommended. Verified per §10.
+Status: **implemented (v1.1)** in `rtl/collector.sv`, with D1–D4 as recommended, verified per §10. v1.1 replaced `wr_col` (= tile_n·n) with `wr_tile_n` (`memory_contract.md` D3): the result memory addresses C words as `{row, tile_n}`, and recovering `tile_n` from `wr_col` would need a divide by n. Model, testbench, assertions, sweep and mutation campaign were all redone for v1.1.
 
 Timing is derived from the RTL as of commit `7406e0b` (`pe_grid`, `tile_ctrl`)
 and from `docs/fsm_contract.md` §6.1. It was cross-checked against
@@ -50,7 +50,6 @@ the tile outputs, provided it latches the tile outputs at `capture` (§5.2).
 | `MAX_M`, `MAX_N` | module parameters | 64 | **Must equal `tile_ctrl`'s** (they set the tile-index widths); ≥ ARRAY_DIM (elaboration `$error`) |
 | `TM_W`, `TN_W` | localparam | same formulas as `tile_ctrl` | Tile-index widths |
 | `ROW_W` | localparam | `max(1, $clog2(MAX_M))` | Global row index of C, 0 … MAX_M − 1 |
-| `COL_W` | localparam | `max(1, $clog2(MAX_N))` | Global column of lane 0, 0 … MAX_N − 1 |
 | `R_W` | localparam | `$clog2(n)` | Row-within-tile counter, 0 … n − 1 |
 
 Single clock `clk`. `rst_n` is asynchronous active-low, matching `tile_ctrl`
@@ -81,9 +80,9 @@ and `pe`. Reset state: idle, every output 0.
 |---|---|---|---|
 | `wr_en` | out | 1 | One row of C is written at the end of this cycle |
 | `wr_row` | out | `ROW_W` | Global row of C: `tile_m·n + r` |
-| `wr_col` | out | `COL_W` | Global column of lane 0: `tile_n·n` |
+| `wr_tile_n` | out | `TN_W` | Tile column: lane j is global column `wr_tile_n·n + j` (v1.1; v1 had `wr_col = tile_n·n`) |
 | `wr_lane_en` | out | n | Lane j is written iff `j < N_t` (a thermometer code) |
-| `wr_data` | out | signed `ACC_WIDTH` × n | `wr_data[j]` → `C[wr_row][wr_col + j]`; = `drain_out[j]` |
+| `wr_data` | out | signed `ACC_WIDTH` × n | `wr_data[j]` → `C[wr_row][wr_tile_n·n + j]`; = `drain_out[j]` |
 
 The memory is assumed always ready and writes on the rising edge that ends a
 `wr_en` cycle. Lanes with `wr_lane_en[j] = 0` must not be written. Their data
@@ -113,7 +112,7 @@ Outputs (combinational from those registers and `drain_out`):
 ```
 wr_en      = active && fresh && (row < rows)
 wr_row     = wr_en ? tm·n + row : 0
-wr_col     = wr_en ? tn·n       : 0
+wr_tile_n  = wr_en ? tn         : 0
 wr_lane_en = wr_en ? (1 << cols) − 1 : 0
 wr_data[j] = wr_en ? drain_out[j] : 0
 ```
@@ -153,7 +152,7 @@ tile_ctrl CAP   DRN   DRN   DRN   ISS/DONE
 drain_out  -    r3    r2    r1    r0
 wr_en      .    .     .     1     1
 wr_row               (skip)(skip) 5     4      (tile_m·4 + r)
-wr_col                            0     0
+wr_tile_n                         0     0
 wr_lane_en                        0111  0111   (N_t = 3)
 ```
 
@@ -189,14 +188,14 @@ the RTL has no undefined behaviour, and each is flagged by an assertion.
 **Input assumption (from `tile_ctrl`, not re-checked by the RTL):** at every
 `capture`, 1 ≤ `tile_rows`, `tile_cols` ≤ n, `tile_m·n + tile_rows ≤ MAX_M` and
 `tile_n·n + tile_cols ≤ MAX_N`. These are `tile_ctrl`'s §9.7–8 properties.
-They are what keep `wr_row` and `wr_col` inside `ROW_W` / `COL_W`. The cocotb
+They are what keep `wr_row` inside `ROW_W` and every written column inside `MAX_N`. The cocotb
 testbench only drives captures that satisfy them; Phase 5 adds an assertion.
 
 ## 7. Properties (spec for the monitors and SVA)
 
 1. `wr_en` only while `active`; never in reset; never without a preceding `capture`.
 2. Per `capture`: exactly `rows` writes, with `wr_row` = tm·n + rows − 1, …, tm·n + 0 in that order, on consecutive drain cycles.
-3. Every write: `wr_col = tn·n`, `wr_lane_en = (1 << cols) − 1`, `wr_data = drain_out`, and `wr_row < MAX_M`, `wr_col + cols ≤ MAX_N`.
+3. Every write: `wr_tile_n = tn`, `wr_lane_en = (1 << cols) − 1`, `wr_data = drain_out`, and `wr_row < MAX_M`, `wr_tile_n·n + cols ≤ MAX_N`.
 4. Write-port outputs are all 0 whenever `wr_en` is 0.
 5. The latched tile values change only on `capture`.
 6. (System) Each C element is written exactly once per job, nothing outside M × N is written, and C equals A @ B.
@@ -206,7 +205,7 @@ testbench only drives captures that satisfy them; Phase 5 adds an assertion.
 
 | | Decision | Recommended | Alternative and trade-off |
 |---|---|---|---|
-| D1 | Write-port shape | **Row write**: global `wr_row`, `wr_col`, n-lane `wr_data` + `wr_lane_en` | Emit `tile_m`/`tile_n`/row-in-tile and let the memory compute the address. That pushes arithmetic into the memory, against the README's "memory is kept dumb" |
+| D1 | Write-port shape | **Row write**: global `wr_row`, tile column `wr_tile_n` (v1.1), n-lane `wr_data` + `wr_lane_en` | Emit `tile_m`/`tile_n`/row-in-tile and let the memory compute the address. That pushes arithmetic into the memory, against the README's "memory is kept dumb" |
 | D2 | What advances the row | **`shift_en`** (+ a `fresh` flag so each row is offered once) | Free-running count of n cycles from `capture`. Same v1 timing, one fewer input, but silently wrong as soon as the drain stalls or overlaps |
 | D3 | Write port registered? | **No**: outputs are simple logic on registers (`drain_out` comes straight from the shadow flops). Zero added latency, and `tile_ctrl.done` stays the job-complete signal | Register the write port (+1 cycle). Cleaner for timing closure, but then the last write lands after `done`, and the top level needs a "results committed" signal |
 | D4 | `capture` during a drain | **Restart** (mirror the grid) | Ignore the new capture. That would write the new tile's shadow data under the old tile's coordinates |

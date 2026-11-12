@@ -42,11 +42,11 @@ class CollectorModel:
         n = self.n
         wr_en = self.active and self.fresh and self.row < self.rows
         if not wr_en:
-            return dict(wr_en=False, wr_row=0, wr_col=0, wr_lane_en=0, wr_data=[0] * n)
+            return dict(wr_en=False, wr_row=0, wr_tile_n=0, wr_lane_en=0, wr_data=[0] * n)
         return dict(
             wr_en=True,
             wr_row=self.tm * n + self.row,
-            wr_col=self.tn * n,
+            wr_tile_n=self.tn,
             wr_lane_en=(1 << self.cols) - 1,
             wr_data=[to_signed(int(d), self.acc_width) for d in drain_out],
         )
@@ -84,8 +84,8 @@ def expected_tile_writes(tile_m, tile_n, rows, cols, n):
     capture). Offset 0 is the cycle right after the capture edge (grid row
     n-1 on drain_out); grid row r is on drain_out at offset n-1-r.
 
-    Returns [(offset, grid_row, wr_row, wr_col, wr_lane_en)], bottom-up.
+    Returns [(offset, grid_row, wr_row, wr_tile_n, wr_lane_en)], bottom-up.
     """
     assert 1 <= rows <= n and 1 <= cols <= n
-    return [(n - 1 - r, r, tile_m * n + r, tile_n * n, (1 << cols) - 1)
+    return [(n - 1 - r, r, tile_m * n + r, tile_n, (1 << cols) - 1)
             for r in range(rows - 1, -1, -1)]

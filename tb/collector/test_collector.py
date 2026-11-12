@@ -46,7 +46,7 @@ CLK_PERIOD_NS = 10
 NUM_RANDOM_CYCLES = 4000
 
 TILE_IN = ("tile_m", "tile_n", "tile_rows", "tile_cols")
-WR_SCALAR = ("wr_en", "wr_row", "wr_col", "wr_lane_en")
+WR_SCALAR = ("wr_en", "wr_row", "wr_tile_n", "wr_lane_en")
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -73,7 +73,6 @@ class Params:
         self.tn_w      = max(1, clog2(self.tiles_n))
         self.dim_w     = self.n.bit_length()
         self.row_w     = max(1, clog2(self.max_m))
-        self.col_w     = max(1, clog2(self.max_n))
         self.acc_mask  = (1 << self.acc_width) - 1
 
 
@@ -185,8 +184,8 @@ class WritePortMonitor(_Monitor):
             width = bin(lanes).count("1")
             if not cur["wr_row"] < p.max_m:
                 self.fail(f"wr_row {cur['wr_row']} >= MAX_M {p.max_m}")
-            if cur["wr_col"] % n or cur["wr_col"] + width > p.max_n:
-                self.fail(f"wr_col {cur['wr_col']} (+{width} lanes) not a tile column inside MAX_N")
+            if cur["wr_tile_n"] >= p.tiles_n or cur["wr_tile_n"] * n + width > p.max_n:
+                self.fail(f"wr_tile_n {cur['wr_tile_n']} (+{width} lanes) not a tile column inside MAX_N")
             exp = [to_signed(d, p.acc_width) for d in cur["drain_out"]]
             if cur["wr_data"] != exp:
                 self.fail(f"wr_data {cur['wr_data']} != drain_out {exp}")
@@ -223,8 +222,8 @@ class TileWriteMonitor(_Monitor):
                 tm, tn, rows, cols = rec["tile"]
                 if due is None:
                     self.fail(f"unexpected write row {cur['wr_row']} (tile {rec['tile']}, no row due)")
-                want = (tm * n + due, tn * n, (1 << cols) - 1)
-                got = (cur["wr_row"], cur["wr_col"], cur["wr_lane_en"])
+                want = (tm * n + due, tn, (1 << cols) - 1)
+                got = (cur["wr_row"], cur["wr_tile_n"], cur["wr_lane_en"])
                 if got != want:
                     self.fail(f"write (row, col, lanes) got {got} want {want} for grid row {due}")
             elif due is not None:
@@ -449,7 +448,7 @@ async def make_env(dut):
                   f"ARRAY_DIM={p.n} ACC_WIDTH={p.acc_width} MAX_M={p.max_m} MAX_N={p.max_n}")
     # stale-build guard: port widths must match what the testbench computes
     for name, w in (("tile_m", p.tm_w), ("tile_n", p.tn_w), ("tile_rows", p.dim_w), ("tile_cols", p.dim_w),
-                    ("wr_row", p.row_w), ("wr_col", p.col_w), ("wr_lane_en", p.n)):
+                    ("wr_row", p.row_w), ("wr_tile_n", p.tn_w), ("wr_lane_en", p.n)):
         assert len(getattr(dut, name)) == w, f"{name} is {len(getattr(dut, name))} bits, expected {w}"
     cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_NS, unit="ns").start())
     dut.rst_n.value = 0

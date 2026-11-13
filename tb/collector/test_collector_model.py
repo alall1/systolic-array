@@ -253,8 +253,8 @@ class System:
         h.tick(start=True, cfg=(M, N, K))
         while True:
             # collector edge with the same PRE-edge controls the grid just used
-            w = self.col.step(o["capture"], o["shift_en"], o["tile_m"], o["tile_n"],
-                              o["feed_M"], o["feed_N"], drain_out=h.grid.drain_out())
+            w = self.col.step(o["capture"], o["shift_en"], o["cap_tile_m"], o["cap_tile_n"],
+                              o["cap_M"], o["cap_N"], drain_out=h.grid.drain_out())
             if o["capture"]:
                 writes_per_capture.append(0)
             if w["wr_en"]:

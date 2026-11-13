@@ -1,9 +1,9 @@
 # Operand buffer + result memory contract (v1)
 
-Status: **implemented (v1)**: `rtl/lane_ram.sv` (×3 in `tb/tile_ctrl_integration/`), D1–D6 as recommended, collector v1.1 (D3). Verified per §9.
+Status: **implemented (v1)**: `rtl/lane_ram.sv` (×3 in `rtl/matmul_top.sv`, system-tested in `tb/matmul_top/`), D1–D6 as recommended, collector v1.1 (D3). Verified per §9.
 
 Derived from the RTL as of commit `1702f7c` (`feeder`, `tile_ctrl`,
-`collector`) and from the Python stand-ins in `tb/tile_ctrl_integration/`,
+`collector`) and from the Python stand-ins in `tb/tile_ctrl_integration/` (since removed; superseded by `tb/matmul_top/`),
 which these memories replace.
 
 ---
@@ -98,8 +98,10 @@ never written, are don't-care (D6).
 
 Truncating `rd_col_a` to `KI_W` bits is safe: `read_sequencer` only issues
 k < K ≤ MAX_K. Reading `tile_m`/`tile_n` live from `tile_ctrl` is also safe for
-operands: they are stable from ISSUE through DRAIN (`fsm_contract.md` §4.5),
-which covers every read of the tile.
+operands: they are stable from ISSUE through the tile's `feed_done` cycle
+(`fsm_contract.md` v2 §4.6), which covers every read of the tile (the last
+address is sampled on the edge before `feed_done`). Under v2 they move to the
+next tile on the edge that ends `feed_done`, while the feeder is idle.
 
 Signedness: `rd_a`/`rd_b` are signed and `wr_data` is signed, while `lane_ram`
 stores raw bits. Each connection is the same width, so the bits pass through unchanged.
@@ -161,11 +163,11 @@ job back as stale. The host now registers `done` before reading, and
 | 2b | **Collector v1.1 (D3):** model, contract and testbench switch `wr_col` → `wr_tile_n`. Red against the current collector RTL, then green after the port change. Rerun its sweep and mutation campaign |
 | 3 | Stub `rtl/lane_ram.sv` + `tb/lane_ram/test_lane_ram.py`: lockstep against the model, monitors for §7.1–4, coverage (lane masks, collisions, `re` held low, address extremes), shown failing first |
 | 4 | Real `rtl/lane_ram.sv`, green, lint clean |
-| 5 | SVA, a mutation campaign, and the system test (`tb/tile_ctrl_integration/`) with three `lane_ram` instances replacing both Python stand-ins. The host loads tile words and reads C after `done`, checking §7.5–8 |
+| 5 | SVA, a mutation campaign, and the system test (`tb/tile_ctrl_integration/`, since superseded by `tb/matmul_top/`) with three `lane_ram` instances replacing both Python stand-ins. The host loads tile words and reads C after `done`, checking §7.5–8 |
 
 ## 10. Open questions
 
-- **M1.** The host interface for the top module: separate raw RAM ports (as here), one shared bus, or an AXI-lite-style register/memory map? Decide with the top module.
+- **M1.** *Resolved* by `docs/top_contract.md`: an SRAM-style host bus in `host_if`, one element per transfer, address `{region, word, lane}` (the tile-word layout is host-visible); AXI4-Lite is a later adapter (H1).
 - **M2.** Should A and B share one RAM with a select bit, halving the instances? That costs read bandwidth: two words are needed every cycle.
 - **M3.** Is exact packing (D2 alternative) worth a constant multiplier once a real RAM size matters?
 - **M4.** Double buffering (README future work) would add a bank-select bit to the A and B addresses. The concatenation scheme extends naturally (`{bank, tile, k}`).

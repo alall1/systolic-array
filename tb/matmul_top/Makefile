@@ -1,4 +1,4 @@
-# cocotb Makefile for the system smoke test: tile_ctrl + feeder + pe_grid + collector + lane_ram (A, B, C)
+# cocotb Makefile for the system test of "matmul_top", driven only through the host bus
 #
 #   make
 #   make WAVES=1         # run + dump waves for GTKWave
@@ -13,13 +13,13 @@ RTL_DIR ?= ../../rtl
 VERILOG_SOURCES += $(RTL_DIR)/pe_pkg.sv $(RTL_DIR)/pe.sv $(RTL_DIR)/pe_grid.sv \
                    $(RTL_DIR)/skew_buffer.sv $(RTL_DIR)/read_sequencer.sv $(RTL_DIR)/feeder.sv \
                    $(RTL_DIR)/tile_ctrl.sv $(RTL_DIR)/collector.sv $(RTL_DIR)/lane_ram.sv \
-                   $(PWD)/tile_ctrl_integration_top.sv
+                   $(RTL_DIR)/host_if.sv $(RTL_DIR)/matmul_top.sv
 
-TOPLEVEL = tile_ctrl_integration_top
-COCOTB_TEST_MODULES = test_tile_ctrl_integration
+TOPLEVEL = matmul_top
+COCOTB_TEST_MODULES = test_matmul_top
 
-# make the shared common/ importable
-export PYTHONPATH := $(PWD)/../common:$(PYTHONPATH)
+# shared common/ helpers (host_map, utils) and the tile_ctrl model (job latency)
+export PYTHONPATH := $(PWD)/../common:$(PWD)/../feeder:$(PWD)/../tile_ctrl:$(PYTHONPATH)
 
 # parameters & passing them into Verilator
 DATA_WIDTH ?= 8

@@ -3,7 +3,7 @@
 
 A hardware matrix-multiplication accelerator built on a systolic array of processing elements (PEs). Each PE does a multiply-accumulate; operands stream through the grid diagonally skewed, and results accumulate in place (output-stationary). Larger matrices are tiled over the output dimensions M and N by the control FSM (`tile_ctrl`); tiling over the K reduction dimension is planned. Memory is kept dumb — all intelligence lives in the feeder, address generator, and control FSM.
 
-Next steps: top module (host interface around the system that the integration test already wires up)
+Next steps: K-tiling (accumulate across passes so K can exceed `MAX_K`; needs a `read_sequencer` change), then valid/ready handshakes
 
 ### Current progress
 - [x] PE module complete and tested
@@ -21,6 +21,7 @@ Next steps: top module (host interface around the system that the integration te
 	- [x] cocotb lockstep testbench, concurrent protocol/schedule monitors, functional coverage closure
 	- [x] SVA assertions in the RTL, lint clean, mutation-tested (10 planted bugs, all caught)
 	- [x] integration smoke test: `tile_ctrl` + feeder + pe_grid computes tiled matmuls equal to numpy
+	- [x] v2: each tile's capture/drain overlaps the next tile's feed (27–40% fewer cycles for K ≤ n; full tiles K + 2n − 2 cycles instead of K + 3n + 1), same contract-first flow: probe, contract, model, red bench, RTL, SVA, mutation-tested (18 planted bugs, all caught)
 - [x] collector module complete and tested
 	- [x] contract written first: [docs/collector_contract.md](docs/collector_contract.md)
 	- [x] Python golden model, validated standalone, incl. a closed-loop tiled matmul through the FSM, feeder and PE-grid models
@@ -34,7 +35,11 @@ Next steps: top module (host interface around the system that the integration te
 	- [x] cocotb lockstep testbench, read scoreboard + hold monitor, functional coverage closure
 	- [x] SVA assertions in the RTL, lint clean, mutation-tested
 	- [x] system test: every byte of A, B and C goes through RTL; Python only plays the host
-- [ ] top module complete and tested
+- [x] top module (`matmul_top`) + host interface (`host_if`) complete and tested
+	- [x] contract written first: [docs/top_contract.md](docs/top_contract.md)
+	- [x] SRAM-style host bus: one element per transfer, address `{region, word, lane}`, registers CTRL / STATUS / DIM_M/N/K
+	- [x] `host_if`: Python golden model (incl. a closed loop of every block model driven only through the bus), cocotb lockstep testbench, register scoreboard + decode monitor, coverage closure, SVA, mutation-tested
+	- [x] `matmul_top` is pure wiring; its system test drives only the bus: load, start, poll, read C == numpy, back-to-back jobs, illegal dims, interference during a job, reset mid-job
 
 ### Notes
 - this design is *output-stationary*, meaning two matrices (e.g. weights and activations) stream in at the same time and the output matrix is "stationary", staying in each PE. 
@@ -91,19 +96,23 @@ Next steps: top module (host interface around the system that the integration te
 	- skew_buffer: triangular bank of shift-register chains; lane *k* delayed by *k* cycles. (n * (n - 1)) / 2 slots per operand side. Delay is the storage; a payload sits in the chain during its delay. Completely opaque to payload contents, only delaying each payload as one unit without touching anything inside. Input is flat payload lanes from read_sequencer, output is the skewed payload lanes into each grid edge.
 
 - the control FSM, `tile_ctrl`, only emits control signals: it never touches data, addresses, or the valid/first bits (read_sequencer owns the k loop, the read addresses, and valid/first). Full contract: [docs/fsm_contract.md](docs/fsm_contract.md).
-	- per output tile: ISSUE (start the feeder) → FEED (wait for the feeder's `done`) → FLUSH (wait for the last operands to cross the skew buffer and grid) → CAPTURE (copy every accumulator into its shadow register) → DRAIN (shift the shadow registers out) → next tile or DONE. Illegal commands (a zero dimension, or one over its limit) go to REJECT, which pulses `done` and `error` together.
-	- cycles per tile = K + M<sub>t</sub> + N<sub>t</sub> + n + 1, where M<sub>t</sub>, N<sub>t</sub> are the tile's rows/cols (≤ n). Job latency = T<sub>m</sub>·T<sub>n</sub>·(K + n + 1) + T<sub>n</sub>·M + T<sub>m</sub>·N, with T<sub>m</sub> = ⌈M/n⌉ and T<sub>n</sub> = ⌈N/n⌉ tiles.
-	- CAPTURE lands in exactly the cycle the last active PE's accumulator becomes final (zero slack): capturing one cycle earlier corrupts only the bottom-right element of each tile, which both the Python model and the RTL integration test confirm.
+	- v2 runs two sequencers. The **front** FSM issues tiles: ISSUE (start the feeder) → FEED (until the feeder's `done`) → WAIT (until the schedule allows the next tile) → … → TAIL (last tile fed) → DONE. The **back** sequencer holds one tile in a capture slot, pulses `capture` (copy every accumulator into its shadow register), then `shift_en` n − 1 times to drain it. A tile moves from front to back on the edge that ends its `feed_done` cycle, so the next tile's feed overlaps this tile's flush, capture and drain. Illegal commands (a zero dimension, or one over its limit) go to REJECT, which pulses `done` and `error` together.
+	- each tile still captures K + M<sub>t</sub> + N<sub>t</sub> + 1 cycles after its ISSUE, exactly when the last active PE's accumulator becomes final (zero slack: one cycle early corrupts the bottom-right element). The next ISSUE comes max(K + 2, M<sub>t</sub> + N<sub>t</sub> + max(K − 2, 0), n + 1 + (M<sub>t</sub> + N<sub>t</sub>) − (M<sub>t</sub>' + N<sub>t</sub>')) cycles later: the feeder must be free; the capture must happen before the next tile's first operand overwrites PE(0,0), three cycles after its ISSUE; and captures stay n + 1 apart so a drain finishes before the next capture. Job latency is the sum of those gaps plus the last tile's K + M<sub>t</sub> + N<sub>t</sub> + n + 1.
+	- the overlap is limited by the broadcast `capture`: all PEs capture in one cycle, so a tile waits for its far-corner PE while the next tile already needs PE(0,0). A capture that ripples through the grid with the data would go further, but changes `pe` / `pe_grid`.
+	- because the feed side has moved on by the time a tile is captured, `tile_ctrl` has separate outputs (`cap_tile_m`, `cap_tile_n`, `cap_M`, `cap_N`) naming the tile being captured; the collector takes those, the operand memories keep `tile_m` / `tile_n`.
 	- edge tiles need nothing special from the FSM: it passes the smaller M<sub>t</sub>/N<sub>t</sub> to the feeder, and the inactive PEs stay idle exactly as before. They do keep stale accumulators from earlier tiles, so the collector must only keep the M<sub>t</sub> × N<sub>t</sub> region of each drained tile.
-	- v1 is deliberately serialized (the next tile waits for the previous drain); overlapping them is listed below.
 - the collector turns the grid's drain into row writes of C: after each `capture`, `drain_out` shows grid row n-1, then one row further up per `shift_en`. Rows ≥ M<sub>t</sub> hold stale accumulators and are skipped; each kept row is written at global row `tile_m·n + r`, column `tile_n·n`, with lane enables for the N<sub>t</sub> valid columns. Full contract: [docs/collector_contract.md](docs/collector_contract.md).
-	- it must latch `tile_m`/`tile_n`/M<sub>t</sub>/N<sub>t</sub> at `capture`: by the time row 0 reaches `drain_out`, `tile_ctrl` is already issuing the next tile and has moved them on. A collector that reads them live writes row 0 of every tile into the next tile's place (the system test catches this as double writes).
+	- it must latch its tile inputs at `capture`: they come from `tile_ctrl`'s `cap_*` outputs, which already move to the next tile partway through this tile's drain. A collector that reads them live writes the last rows of every tile into the next tile's place (the system test catches this as double writes).
 	- it follows `shift_en` rather than counting cycles after `capture`, so it stays correct if a later version stalls or overlaps the drain.
 	- the write port is not registered, so the last write of a job lands in `tile_ctrl`'s `done` cycle: `done` already means "all of C is written by the end of this cycle".
 - the memories store data in a **tile-word layout**: one word holds the n lanes that move together in one cycle, so every address is a concatenation of indices that already exist on some port. A is stored **transposed** (word `{tile_m, k}` holds `A[tile_m·n + l][k]`), so the n rows the feeder needs each cycle come from one wide read instead of n banks; B is word `{tile_n, k}`; C is word `{row, tile_n}`. Full contract: [docs/memory_contract.md](docs/memory_contract.md).
 	- one generic `lane_ram` (per-lane write enables, registered read-first read, no reset) is instantiated three times; the layout lives entirely in the address wiring.
 	- the collector sends the tile column `wr_tile_n` rather than the element column, because recovering `tile_n` from `tile_n·n` would need a divide by n.
 	- the host must start reading C the cycle **after** `done`: the job's last row is committed on the edge that ends the `done` cycle, and a read on that same edge returns the old word (the system test's own host got this wrong the first time).
+- the host sees one SRAM-style bus (always ready, read data one cycle later). Each transfer is one element; the address is `{region, word, lane}` with region 0 = registers, 1 = A, 2 = B, 3 = C, and word/lane in the tile-word layout, so host software does the `/ n` and `% n`, never the hardware. A job is: write A and B elements, write `DIM_M`, `DIM_N`, `DIM_K`, write `CTRL.START`, poll `STATUS` until `DONE`, read C elements. Full contract: [docs/top_contract.md](docs/top_contract.md).
+	- `STATUS.BUSY` also covers a start that has been written but not yet accepted, and `DONE` / `CMD_ERROR` read as sticky OR live. The first design cleared the sticky bits one cycle later, on the accept edge; the closed-loop model caught a host polling right after `START` reading the **previous** job's `DONE` and then stale C.
+	- because `DONE` is only visible once the last C row is being committed, a polling host can never read C too early: the read-after-done race of the memories is impossible through the bus.
+	- A / B writes during a job are dropped and set `STATUS.HOST_ERROR`; the running job's result is unaffected.
 
 ### Running the tests
 Each module has its own cocotb directory under `tb/` (Verilator + cocotb, from the repo's venv):
@@ -114,7 +123,9 @@ cd tb/collector && make              # collector: lockstep + monitors + coverage
 cd tb/collector && make model        # collector golden model, plain pytest
 cd tb/lane_ram && make               # lane_ram: lockstep + monitors + coverage (SVA on)
 cd tb/lane_ram && make model         # lane_ram model + tile layout, plain pytest
-cd tb/tile_ctrl_integration && make   # whole system (incl. A/B/C lane_rams) vs numpy
+cd tb/host_if && make                # host_if: lockstep + monitors + coverage (SVA on)
+cd tb/host_if && make model          # host_if model + closed loop through the bus, plain pytest
+cd tb/matmul_top && make             # whole accelerator, driven only through the host bus, vs numpy
 ```
 Useful knobs: `ARRAY_DIM=<n>`, `SEED=<n>`, `WAVES=1` (GTKWave dump), `SVA=0`, and for `tb/tile_ctrl`, `LOCKSTEP=0` (monitors judge alone).
 
@@ -128,7 +139,7 @@ Useful knobs: `ARRAY_DIM=<n>`, `SEED=<n>`, `WAVES=1` (GTKWave dump), `SVA=0`, an
 
 **K-tiling** Accumulate partial sums across passes so K can exceed `MAX_K`. Needs an upstream change: read_sequencer always asserts `first` on k = 0, which overwrites the accumulators every pass.
 
-**overlapped tiles** Let tile *i*'s capture/drain run during tile *i+1*'s feed, which the shadow-register double buffer was built for. The legal capture window is derived in the contract; this would cut the per-tile cost to roughly max(K + 1, K + M<sub>t</sub> + N<sub>t</sub> − 2, n) cycles.
+**ripple capture** Overlapped tiles (done, `tile_ctrl` v2) are limited by the broadcast `capture`. Capturing each PE as its own result becomes final, in a wave that follows the data, would bring the tile period near K + 1. It changes `pe` and `pe_grid`.
 
 **valid/ready handshake interfaces** Explicit transfer contract on feeder→array and array→output: a transfer happens only when `valid && ready`. `valid` must not depend combinationally on `ready`; once high, data stays stable until the transfer completes. Backpressure propagates — a stalled output freezes the array with no dropped results. Optionally AXI-Stream naming, deliberately not full AXI4-MM.
 

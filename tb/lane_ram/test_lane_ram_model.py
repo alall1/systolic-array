@@ -189,8 +189,8 @@ class MemSystem:
         h.tick(start=True, cfg=(M, N, K))
         while True:
             self._c_edge()                          # commits the write visible before this edge
-            self.w = self.col.step(o["capture"], o["shift_en"], o["tile_m"], o["tile_n"],
-                                   o["feed_M"], o["feed_N"], drain_out=h.grid.drain_out())
+            self.w = self.col.step(o["capture"], o["shift_en"], o["cap_tile_m"], o["cap_tile_n"],
+                                   o["cap_M"], o["cap_N"], drain_out=h.grid.drain_out())
             if self.w["wr_en"]:
                 a = c_addr(self.w["wr_row"], self.w["wr_tile_n"], self.tn_w)
                 assert a in c_words(M, N, n, self.tn_w), "write outside C"

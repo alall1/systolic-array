@@ -2,6 +2,8 @@
 
 Status: **implemented (v1.1)** in `rtl/collector.sv`, with D1–D4 as recommended, verified per §10. v1.1 replaced `wr_col` (= tile_n·n) with `wr_tile_n` (`memory_contract.md` D3): the result memory addresses C words as `{row, tile_n}`, and recovering `tile_n` from `wr_col` would need a divide by n. Model, testbench, assertions, sweep and mutation campaign were all redone for v1.1.
 
+**`tile_ctrl` v2 (overlapped tiles, `fsm_contract.md` v2):** no change to `rtl/collector.sv`. Its four tile inputs are now driven from `tile_ctrl`'s `cap_tile_m`, `cap_tile_n`, `cap_M`, `cap_N` (the tile being captured) instead of the feed-side outputs, and captures come ≥ n + 1 cycles apart, so every input stays inside §6's contract. §3.1, §5 and §6 below are updated for v2.
+
 Timing is derived from the RTL as of commit `7406e0b` (`pe_grid`, `tile_ctrl`)
 and from `docs/fsm_contract.md` §6.1. It was cross-checked against
 `TileCtrlModel` + `FeederModel`. No existing module changes, `tile_ctrl` included.
@@ -31,9 +33,9 @@ memory is outside it, as a Python model in v1), and it does not talk to the host
 
 | Concern | Owner |
 |---|---|
-| When to capture, how many shifts | `tile_ctrl` (CAPTURE, DRAIN) |
+| When to capture, how many shifts | `tile_ctrl` (back sequencer: `capture`, then n − 1 `shift_en`) |
 | The shadow registers, the shift chain, `drain_out` | `pe_grid` / `pe` |
-| Which tile is in flight, its dims M_t × N_t | `tile_ctrl` (`tile_m`, `tile_n`, `feed_M`, `feed_N`) |
+| Which tile is being captured, its dims M_t × N_t | `tile_ctrl` (`cap_tile_m`, `cap_tile_n`, `cap_M`, `cap_N`) |
 | Storing C | result memory (external) |
 
 This answers `fsm_contract.md` **Q3**: the FSM needs **no** extra drain-row
@@ -63,10 +65,10 @@ and `pe`. Reset state: idle, every output 0.
 |---|---|---|---|---|
 | `capture` | in | 1 | `tile_ctrl.capture` (same net as `pe_grid.capture`) | Starts a tile's drain; latches the four tile inputs below |
 | `shift_en` | in | 1 | `tile_ctrl.shift_en` (same net as `pe_grid.shift_en`) | Each sampled `shift_en` brings the next row up to `drain_out` |
-| `tile_m` | in | `TM_W` | `tile_ctrl.tile_m` | Sampled **only** with `capture` |
-| `tile_n` | in | `TN_W` | `tile_ctrl.tile_n` | Sampled only with `capture` |
-| `tile_rows` | in | `DIM_W` | `tile_ctrl.feed_M` (M_t) | Sampled only with `capture` |
-| `tile_cols` | in | `DIM_W` | `tile_ctrl.feed_N` (N_t) | Sampled only with `capture` |
+| `tile_m` | in | `TM_W` | `tile_ctrl.cap_tile_m` (v1: `tile_m`) | Sampled **only** with `capture` |
+| `tile_n` | in | `TN_W` | `tile_ctrl.cap_tile_n` (v1: `tile_n`) | Sampled only with `capture` |
+| `tile_rows` | in | `DIM_W` | `tile_ctrl.cap_M` (M_t; v1: `feed_M`) | Sampled only with `capture` |
+| `tile_cols` | in | `DIM_W` | `tile_ctrl.cap_N` (N_t; v1: `feed_N`) | Sampled only with `capture` |
 
 ### 3.2 From `pe_grid`
 
@@ -135,9 +137,9 @@ edge into τ_c + 1:
 
 | τ | `tile_ctrl` | `drain_out` shows | collector `row` | `wr_en` |
 |---|---|---|---|---|
-| τ_c | CAPTURE | (previous tile's shadow) | — | 0 |
-| τ_c + 1 … τ_c + n − 1 | DRAIN (`shift_en`) | grid row n − 1 − (τ − τ_c − 1) | same | iff row < M_t |
-| τ_c + n | next ISSUE, or DONE | grid row 0 | 0 | 1 |
+| τ_c | `capture` | (previous tile's shadow) | — | 0 |
+| τ_c + 1 … τ_c + n − 1 | `shift_en` | grid row n − 1 − (τ − τ_c − 1) | same | iff row < M_t |
+| τ_c + n | DONE if last tile (v1: next ISSUE or DONE) | grid row 0 | 0 | 1 |
 | τ_c + n + 1 | | | idle | 0 |
 
 So each tile produces **exactly M_t writes**, bottom-up (row M_t − 1 first), in
@@ -158,9 +160,12 @@ wr_lane_en                        0111  0111   (N_t = 3)
 
 ### 5.2 Why the tile inputs must be latched at `capture`
 
-Row 0 is on `drain_out` at τ_c + n, which is the **next tile's ISSUE cycle**.
-`tile_ctrl` has already advanced `tile_m`, `tile_n`, `feed_M` and `feed_N` on
-the edge into it. Checked against `TileCtrlModel` for M = 6, N = 5, K = 3,
+Under v1, row 0 is on `drain_out` at τ_c + n, which is the **next tile's ISSUE cycle**,
+and `tile_ctrl` has already advanced `tile_m`, `tile_n`, `feed_M` and `feed_N` on
+the edge into it. Under v2 the inputs come from `cap_*`, which move on the next
+tile's handoff edge, and that can fall inside this tile's drain (`fsm_contract.md`
+§6.2 chart: `cap_tile` moves at t = 14 and 20 while rows are still draining). So the
+latch is needed under both versions. The v1 finding: Checked against `TileCtrlModel` for M = 6, N = 5, K = 3,
 n = 4: at every non-final row-0 cycle the tile outputs already name the next
 tile, e.g. capture of tile (0,0) 4×4 → row 0 cycle shows tile (0,1) 4×1. Reading
 them live would put row 0 of every tile in the wrong place with the wrong
@@ -171,11 +176,11 @@ lane mask.
 - Writes per job = Σ_tiles M_t = T_n · M (each tile row of C is written once per tile column).
 - Every element C[i][j], i < M, j < N, is written **exactly once**. Nothing outside M × N is written.
 - The last write of a job happens in `tile_ctrl`'s **DONE cycle** (the last tile's row-0 cycle, τ_c + n = L). It is committed by the edge that ends the DONE cycle. So **`tile_ctrl.done` already means "all of C is written by the end of this cycle"**, and no extra completion signal is needed (§8, D3).
-- v1 tiles are serialized, so a tile's drain always ends before the next `capture`. The next capture is ≥ K + M_t' + N_t' + 2 cycles after the drain ends.
+- A tile's drain always ends before the next `capture`: v2 keeps captures ≥ n + 1 cycles apart (`fsm_contract.md` §6.2 term c, V3), so the next capture comes at least one cycle after the row-0 cycle. (v1 was serialized: ≥ K + M_t' + N_t' + 2 cycles.)
 
 ## 6. Illegal / out-of-contract inputs
 
-None of these can happen with the v1 `tile_ctrl`. Each is defined anyway, so
+None of these can happen with `tile_ctrl` (v1 or v2). Each is defined anyway, so
 the RTL has no undefined behaviour, and each is flagged by an assertion.
 
 | Situation | Behaviour | Why |
@@ -219,7 +224,7 @@ testbench only drives captures that satisfy them; Phase 5 adds an assertion.
 5. **Masked lanes carry stale data** on `wr_data`; only `wr_lane_en` protects them.
 6. **`MAX_M` / `MAX_N` must be set identically on `tile_ctrl` and `collector`.** Nothing checks this inside either module; the system top should pass one value to both.
 7. **No error output.** Out-of-contract inputs (§6) are defined and asserted, but not reported on a port.
-8. **The out-of-contract-input assertions are off in the standalone testbench.** It drives those inputs on purpose, so `tb/collector/Makefile` defines `COLLECTOR_TB_OUT_OF_CONTRACT`. The system build (`tb/tile_ctrl_integration/`) keeps them live, which also checks that `tile_ctrl` never produces them.
+8. **The out-of-contract-input assertions are off in the standalone testbench.** It drives those inputs on purpose, so `tb/collector/Makefile` defines `COLLECTOR_TB_OUT_OF_CONTRACT`. The system build (`tb/matmul_top/`) keeps them live, which also checks that `tile_ctrl` never produces them.
 9. **The RTL assertions do not cover reset.** They are disabled while reset is asserted (via a checker-only `sva_armed` flop), so async-reset behaviour is checked by the cocotb `WritePortMonitor` and `Env.reset`.
 
 ## 10. Verification plan (same flow as `tile_ctrl`)
@@ -229,10 +234,10 @@ testbench only drives captures that satisfy them; Phase 5 adds an assertion.
 | 2 | `tb/collector/collector_model.py`: `CollectorModel`, cycle-steppable like `TileCtrlModel`. `test_collector_model.py`: pytest, including a closed loop of `TileCtrlModel` + `FeederModel` + a PEModel grid + `CollectorModel` + a result-memory model that must reproduce A @ B with each element written exactly once |
 | 3 | Stub `rtl/collector.sv` + `tb/collector/test_collector.py`: lockstep against the model, monitors for §7.1–5, coverage (tile shapes, edge tiles, out-of-contract cases), shown failing first |
 | 4 | Real `rtl/collector.sv`, green |
-| 5 | Lint, SVA, a mutation campaign. The system test: `tb/tile_ctrl_integration/` gets the RTL collector plus a Python result memory in place of the Python collector, and checks §7.6–7 |
+| 5 | Lint, SVA, a mutation campaign. The system test (then `tb/tile_ctrl_integration/`, now `tb/matmul_top/`) gets the RTL collector plus a Python result memory in place of the Python collector, and checks §7.6–7 |
 
 ## 11. Open questions
 
-- **C1.** Should the system top expose `done` straight from `tile_ctrl` (sufficient under D3), or wait for a top-level "results committed" signal (needed if D3 changes)?
+- **C1.** *Resolved* by `docs/top_contract.md` (T5): the host sees `STATUS.DONE` (sticky OR live), never `tile_ctrl.done` directly; polling makes the first C read come after the last C write by construction.
 - **C2.** When overlapped tiles arrive (`fsm_contract.md` Q1), the next `capture` may come while the collector is still draining. D2 keeps the collector correct only if the shadow drain completes first, which the FSM contract already requires (next capture ≥ n cycles after the previous one). Confirm that requirement survives the overlap design.
 - **C3.** Should the result memory be part of the repo (an RTL dummy memory, README future work) or stay a Python model until the top module?

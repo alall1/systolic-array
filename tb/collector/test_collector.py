@@ -10,8 +10,9 @@ compared (Env.tick).
 Stimulus comes from two sources:
   - raw control sequences (directed + random): stalls, mid-drain captures,
     capture with shift_en, junk on the tile inputs between captures
-  - the real FSM schedule: TileCtrlModel + FeederModel in closed loop, so
-    tile_m/tile_n/rows/cols move on the row-0 cycle exactly as in the system
+  - the real FSM schedule: TileCtrlModel (v2, overlapped tiles) + FeederModel
+    in closed loop, driving the tile inputs from cap_* as matmul_top does: they
+    move on tile_ctrl's handoff edges, often mid-drain
 
 Independent of the model, concurrent monitors sample once per cycle (FallingEdge):
   WritePortMonitor - contract §7.1, 3, 4: idle outputs zero, thermometer lane
@@ -315,7 +316,7 @@ class FsmSource:
     def controls(self):
         """tile_ctrl's outputs now = the collector's inputs for the coming edge."""
         o = self.o
-        return o["capture"], o["shift_en"], (o["tile_m"], o["tile_n"], o["feed_M"], o["feed_N"])
+        return o["capture"], o["shift_en"], (o["cap_tile_m"], o["cap_tile_n"], o["cap_M"], o["cap_N"])
 
     def advance(self, start=False, cfg=(0, 0, 0)):
         o, fo = self.o, self.fo
